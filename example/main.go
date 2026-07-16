@@ -1,80 +1,61 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"log/slog"
+	"os"
+	"os/signal"
+	"time"
 
-	"github.com/davecgh/go-spew/spew"
-	"github.com/jonaz/gombus"
-	"github.com/sirupsen/logrus"
+	"github.com/yottabytesolutions/gombus"
 )
 
-var primaryID = flag.Int("id", 1, "primaryID to fetch data from")
+var (
+	primaryID = flag.Int("id", 1, "primaryID to fetch data from")
+	device    = flag.String("device", "192.168.13.42:10001", "tcp address of the mbus gateway")
+)
 
 func main() {
 	flag.Parse()
 
-	// logrus.SetLevel(logrus.DebugLevel)
+	// Ctrl-C cancels the exchange in flight rather than waiting out its timeout.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
-	conn, err := gombus.DialTCP("192.168.13.42:10001")
+	conn, err := gombus.DialTCP(*device)
 	if err != nil {
-		logrus.Error(err)
-		return
-	}
-	defer conn.Close()
-
-	frame := gombus.SndNKE(uint8(*primaryID))
-	fmt.Printf("sending nke: % x\n", frame)
-	_, err = conn.Write(frame)
-	if err != nil {
-		logrus.Error(err)
-		return
-	}
-	_, err = gombus.ReadSingleCharFrame(conn)
-	if err != nil {
-		logrus.Error(err)
+		slog.Error("dial failed", "err", err)
 		return
 	}
 
-	// frame := gombus.SetPrimaryUsingPrimary(0, 3)
-	respFrame := &gombus.DecodedFrame{}
-	lastFCB := true
-	frames := 0
-	for respFrame.HasMoreRecords() || frames == 0 {
-		frames++
-		// frame := gombus.SetPrimaryUsingPrimary(0, 3)
-		frame = gombus.RequestUD2(uint8(*primaryID))
-		if !lastFCB {
-			frame.SetFCB()
-			frame.SetChecksum()
+	// One Client for the whole session. It owns the framing state, so reusing it
+	// is what keeps consecutive frames aligned on the stream.
+	client := gombus.NewClient(conn)
+	defer func() {
+		if err := client.Close(); err != nil {
+			slog.Error("close failed", "err", err)
 		}
-		lastFCB = frame.C().FCB()
+	}()
 
-		fmt.Printf("sending: % x\n", frame)
-		fmt.Printf("sending C: % b\n", frame.C())
-		_, err = conn.Write(frame)
-		if err != nil {
-			logrus.Error(err)
-			return
-		}
-
-		resp, err := gombus.ReadLongFrame(conn)
-		if err != nil {
-			logrus.Error(err)
-			return
-		}
-
-		fmt.Printf("read: % x\n", resp)
-		fmt.Printf("read C: % b\n", resp.C())
-
-		respFrame, err = resp.Decode()
-		if err != nil {
-			logrus.Error(err)
-			return
-		}
-		spew.Dump(respFrame)
-		logrus.Info("read total values: ", len(respFrame.DataRecords))
+	frames, err := client.ReadAllFrames(ctx, uint8(*primaryID))
+	if err != nil {
+		slog.Error("read all frames failed", "err", err)
+		return
 	}
 
-	logrus.Info("read total frames: ", frames)
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	for _, frame := range frames {
+		if err := enc.Encode(frame); err != nil {
+			slog.Error("encode failed", "err", err)
+			return
+		}
+		slog.Info("read values", "count", len(frame.DataRecords))
+	}
+	fmt.Printf("read %d frame(s)\n", len(frames))
 }

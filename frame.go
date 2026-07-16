@@ -1,451 +1,105 @@
 package gombus
 
-import (
-	"encoding/binary"
-	"encoding/hex"
-	"fmt"
-	"strconv"
+// Frame layouts and bit-level accessors for the M-Bus link layer.
+//
+// A short frame is 5 bytes (10h | C | A | CRC | 16h) and is used by the
+// master to send fixed-size commands such as REQ_UD2 and SND_NKE.
+//
+// A long frame begins with 68h LL LL 68h, where LL is the user-data length
+// repeated. After the C/A/CI fields the variable-data response carries the
+// device identification block followed by data records. It ends with a
+// one-byte arithmetic checksum and the stop byte 16h.
 
-	"github.com/sirupsen/logrus"
-)
+// ShortFrame is a 5-byte master->slave request frame.
+type ShortFrame []byte
 
-type Frame []byte
-
-type ShortFrame Frame
-
+// NewShortFrame returns an unaddressed REQ_UD2-shaped short frame ready to
+// have its address and C field filled in. SetChecksum must be called after
+// any modification.
 func NewShortFrame() ShortFrame {
 	return ShortFrame{
-		0x10, // Start byte short frame
-		0x7b, // C field
+		0x10, // start byte (short frame)
+		0x7b, // C field (default REQ_UD2)
 		0x00, // A field
 		0x00, // checksum
 		0x16, // stop byte
 	}
 }
 
+// SetChecksum recomputes the checksum byte from the C and A fields.
 func (sf ShortFrame) SetChecksum() {
-	size := len(sf)
-	sf[size-2] = calcCheckSum(sf[1 : size-2])
+	sf[len(sf)-2] = calcCheckSum(sf[1 : len(sf)-2])
 }
 
-func (sf ShortFrame) SetAddress(primary uint8) {
-	sf[2] = primary
-}
-func (sf ShortFrame) SetC(c uint8) {
-	sf[1] = c
-}
+// SetAddress sets the A field (primary address).
+func (sf ShortFrame) SetAddress(primary uint8) { sf[2] = primary }
 
-func (sf ShortFrame) C() C {
-	return C(sf[1])
-}
+// SetC sets the C field.
+func (sf ShortFrame) SetC(c uint8) { sf[1] = c }
 
-func (sf ShortFrame) SetFCB() {
-	sf[1] |= CONTROL_MASK_FCB
-}
+// C returns the C (control) field.
+func (sf ShortFrame) C() C { return C(sf[1]) }
 
-func (sf ShortFrame) SetFCV() {
-	sf[1] |= CONTROL_MASK_FCV
-}
+// A returns the A (address) field.
+func (sf ShortFrame) A() byte { return sf[2] }
 
-func (sf ShortFrame) ClearFCB() {
-	sf[1] &^= CONTROL_MASK_FCB
-}
+// SetFCB sets the Frame Count Bit in the C field.
+func (sf ShortFrame) SetFCB() { sf[1] |= ControlMaskFcb }
 
-func (sf ShortFrame) ClearFCV() {
-	sf[1] &^= CONTROL_MASK_FCV
-}
+// SetFCV sets the Frame Count Valid bit in the C field.
+func (sf ShortFrame) SetFCV() { sf[1] |= ControlMaskFcv }
 
-func (sf ShortFrame) A() byte {
-	return sf[2]
-}
+// ClearFCB clears the Frame Count Bit in the C field.
+func (sf ShortFrame) ClearFCB() { sf[1] &^= ControlMaskFcb }
 
-type LongFrame Frame
+// ClearFCV clears the Frame Count Valid bit in the C field.
+func (sf ShortFrame) ClearFCV() { sf[1] &^= ControlMaskFcv }
 
+// LongFrame is a variable-length frame used for both master->slave commands
+// (CI=0x50/0x51/0x52) and slave->master variable-data responses (CI=0x72).
+type LongFrame []byte
+
+// SetChecksum recomputes the checksum byte over the user data area.
 func (lf LongFrame) SetChecksum() {
-	size := len(lf)
-	lf[size-2] = calcCheckSum(lf[4 : size-2])
+	lf[len(lf)-2] = calcCheckSum(lf[4 : len(lf)-2])
 }
 
+// SetLength sets the two L bytes from the current frame length.
 func (lf LongFrame) SetLength() {
-	lf[1] = byte(len(lf) - 6)
-	lf[2] = byte(len(lf) - 6)
+	l := byte(len(lf) - 6)
+	lf[1] = l
+	lf[2] = l
 }
 
-func (lf LongFrame) L() int {
-	return int(lf[1])
-}
+// L returns the L field (user data length).
+func (lf LongFrame) L() int { return int(lf[1]) }
 
-func (lf LongFrame) C() C {
-	return C(lf[4])
-}
+// C returns the C (control) field.
+func (lf LongFrame) C() C { return C(lf[4]) }
 
-func (lf LongFrame) SetFCB() {
-	lf[4] |= CONTROL_MASK_FCB
-}
+// A returns the A (address) field.
+func (lf LongFrame) A() byte { return lf[5] }
 
-func (lf LongFrame) SetFCV() {
-	lf[4] |= CONTROL_MASK_FCV
-}
+// CI returns the CI (control information) field.
+func (lf LongFrame) CI() byte { return lf[6] }
 
-func (lf LongFrame) ClearFCB() {
-	lf[4] &^= CONTROL_MASK_FCB
-}
+// SetFCB sets the Frame Count Bit in the C field.
+func (lf LongFrame) SetFCB() { lf[4] |= ControlMaskFcb }
 
-func (lf LongFrame) ClearFCV() {
-	lf[4] &^= CONTROL_MASK_FCV
-}
+// SetFCV sets the Frame Count Valid bit in the C field.
+func (lf LongFrame) SetFCV() { lf[4] |= ControlMaskFcv }
 
-func (lf LongFrame) A() byte {
-	return lf[5]
-}
-func (lf LongFrame) CI() byte {
-	return lf[6]
-}
+// ClearFCB clears the Frame Count Bit in the C field.
+func (lf LongFrame) ClearFCB() { lf[4] &^= ControlMaskFcb }
 
-func (lf LongFrame) Decode() (*DecodedFrame, error) {
-	if lf.CI() != 0x72 {
-		return nil, fmt.Errorf("unknown longframe, only supports variable data response for now")
-	}
+// ClearFCV clears the Frame Count Valid bit in the C field.
+func (lf LongFrame) ClearFCV() { lf[4] &^= ControlMaskFcv }
 
-	man, err := lf.DecodeManufacturer()
-	if err != nil {
-		return nil, err
-	}
-
-	dr, err := lf.decodeData(lf[19 : len(lf)-2])
-	if err != nil {
-		return nil, err
-	}
-	dt, err := deviceTypeLookup(lf[14])
-	if err != nil {
-		return nil, err
-	}
-
-	version := int(lf[13])
-
-	dFrame := &DecodedFrame{
-		raw:          lf,
-		SerialNumber: bcdToInt(lf[7:11]),
-		Manufacturer: man,
-		ProductName:  "", // TODO
-		Version:      version,
-		DeviceType:   dt,
-		AccessNumber: 0, // TODO
-		Signature:    0, // TODO
-		Status:       0, // TODO
-		DataRecords:  dr,
-	}
-
-	return dFrame, nil
-}
-
-func (lf LongFrame) decodeData(data []byte) ([]DecodedDataRecord, error) {
-	records := make([]DecodedDataRecord, 0)
-
-	var dData DecodedDataRecord
-	// var dif byte
-	dif := -1
-	var dife []byte
-	lookForData := false
-	lookForDIFE := false
-	lookForVIF := false
-	lookForVIFE := false
-	remainingData := 0
-	customUnit := ""
-	var vife []byte
-	var vif byte
-	for i, v := range data {
-		if remainingData > 0 {
-			remainingData--
-			continue
-		}
-		// expect first one is a DIF
-		if dif == -1 {
-			// DIF	Function TODO those
-			// 0x0f	Start of manufacturer specific data structures to end of user data
-			// 0x3f..0x6f	Reserved
-			// 0x7f	Global readout request (all storage#, units, tariffs, function fields)
-
-			dData = DecodedDataRecord{}
-			dData.Function = decodeRecordFunction(v)
-			dData.StorageNumber = int(v) & DATA_RECORD_DIF_MASK_STORAGE_NO
-
-			// 1Fh DONE Same meaning as DIF = 0Fh + More records follow in next telegram
-			if v == 0x1f {
-				dData.HasMoreRecords = true
-				records = append(records, dData)
-			}
-			// 2Fh  Idle Filler (not to be interpreted), following byte = DIF
-			if v == 0x2f {
-				continue
-			}
-
-			dif = int(v)
-			logrus.Tracef("dif is: % x\n", dif)
-			if checkKthBitSet(int(v), 7) {
-				lookForDIFE = true
-				continue
-			}
-			lookForVIF = true
-			continue
-		}
-		if lookForDIFE { // has another DIFE{
-			dife = append(dife, v)
-			// TODO validate we dont have more than 10 here
-			if checkKthBitSet(int(v), 7) {
-				// lookForDIFE = true
-				continue
-			}
-			lookForDIFE = false
-			lookForVIF = true
-			continue
-		}
-
-		// E111 1100 7 bits data
-		if lookForVIF {
-			vif = v
-			if checkKthBitSet(int(v), 7) {
-				lookForVIF = false
-				lookForVIFE = true
-				continue
-			}
-
-			// In case of VIF = 7Ch / FCh the true VIF is represented by the following ASCII string with the length given in the first byte
-			if vif == 0x7c {
-				l := int(data[i+1])
-				customUnit = decodeASCII(data[i+2 : i+2+l])
-				remainingData = l + 1
-				lookForVIF = false
-				lookForData = true
-				continue
-			}
-
-			lookForVIF = false
-			lookForData = true
-			continue
-		}
-		if lookForVIFE {
-			vife = append(vife, v)
-			// TODO validate we dont have more than 10 here
-			if checkKthBitSet(int(v), 7) {
-				// lookForVIFE = true
-				continue
-			}
-			lookForVIFE = false
-			lookForData = true
-			continue
-		}
-
-		if lookForData {
-			if customUnit != "" {
-				dData.Unit = Unit{
-					Exp:         1,
-					Unit:        customUnit,
-					Type:        VIFUnit["VARIABLE_VIF"],
-					VIFUnitDesc: "",
-				}
-				customUnit = ""
-			} else {
-				dData.Unit = decodeUnit(vif, vife)
-			}
-			dData.StorageNumber = decodeStorageNumber(dif, dife)
-			dData.Device = decodeDevice(dif, dife)
-			dData.Tariff = decodeTariff(dif, dife)
-
-			difCoding := dif & DATA_RECORD_DIF_MASK_DATA
-			logrus.Tracef("Datarecord dif mask: %b ( %#x )", difCoding, difCoding)
-
-			switch difCoding {
-			// 0000	No data
-			case 0x00:
-				remainingData = 0
-
-			// 0001	8 Bit Integer
-			case 0x01:
-				remainingData = 0
-				dData.RawValue = float64(data[i])
-				logrus.Tracef("data dif 0x01 is: % x\n", data[i])
-
-			// 0010	16 Bit Integer
-			case 0x02:
-				remainingData = 1
-				dData.RawValue = float64(binary.LittleEndian.Uint16(data[i : i+2]))
-				logrus.Tracef("data dif 0x02 is: % x\n", data[i:i+4])
-
-			// 0011	24 Bit Integer
-			case 0x03:
-				remainingData = 2
-
-			// 4 byte (32 bit)
-			case 0x04:
-				remainingData = 3
-				logrus.Tracef("data dif 0x04 is: % x\n", data[i:i+4])
-				v, err := int32ToInt(data[i : i+4])
-				if err != nil {
-					return nil, err
-				}
-
-				dData.RawValue = float64(v)
-
-			// 0101	32 Bit Real
-			case 0x05:
-				remainingData = 3
-
-			// 0110	48 Bit Integer
-			case 0x06:
-				remainingData = 5
-
-			// 0111	64 Bit Integer
-			case 0x07:
-				remainingData = 7
-
-			// 1000	Selection for Readout
-			case 0x08:
-				remainingData = 0
-
-			// 1001	2 digit BCD
-			case 0x09:
-				remainingData = 0
-				dData.RawValue = float64(bcdToInt(data[i : i+1]))
-
-			// 1010	4 digit BCD
-			case 0x0a:
-				remainingData = 1
-				dData.RawValue = float64(bcdToInt(data[i : i+2]))
-
-			// 1011	6 digit BCD
-			case 0x0b:
-				remainingData = 2
-				dData.RawValue = float64(bcdToInt(data[i : i+3]))
-
-			// 1100	8 digit BCD
-			case 0x0c:
-				remainingData = 3
-				dData.RawValue = float64(bcdToInt(data[i : i+4]))
-
-			// 1101	variable length
-			case 0x0d:
-				// With data field = 1101b several data types with variable length can be used. The length of the data is given with the first byte of data, which is here called LVAR.
-				// LVAR = 00h .. BFh : ASCII string with LVAR characters
-				// LVAR = C0h .. CFh : positive BCD number with (LVAR - C0h) · 2 digits
-				// LVAR = D0h .. DFH : negative BCD number with (LVAR - D0h) · 2 digits
-				// LVAR = E0h .. EFh : binary number with (LVAR - E0h) bytes
-				// LVAR = F0h .. FAh : floating point number with (LVAR - F0h) bytes [to be defined]
-				// LVAR = FBh .. FFh : Reserved
-				size := 0
-				if data[i] <= 0xBF {
-					size = int(data[i])
-					dData.ValueString = decodeASCII(data[i+1 : i+1+size])
-				} else if data[i] >= 0xC0 && data[i] <= 0xCF {
-					size = (int(data[i]) - 0xC0) * 2
-					// TODO data here
-				} else if data[i] >= 0xD0 && data[i] <= 0xDF {
-					size = (int(data[i]) - 0xD0) * 2
-					// TODO data here
-				} else if data[i] >= 0xE0 && data[i] <= 0xEF {
-					size = int(data[i]) - 0xE0
-					// TODO data here
-				} else if data[i] >= 0xF0 && data[i] <= 0xFA {
-					size = int(data[i]) - 0xF0
-					// TODO data here
-				}
-				remainingData = size
-
-			// 1110	12 digit BCD
-			case 0x0e:
-				remainingData = 5
-				dData.RawValue = float64(bcdToInt(data[i : i+6]))
-
-			// 1111	Special Functions
-			case 0x0f:
-				remainingData = 0 // TODO what here?
-			}
-			lookForData = false
-			dif = -1
-			dife = nil
-			vif = 0
-			vife = nil
-			logrus.Trace("rawValue: ", dData.RawValue)
-			logrus.Trace("valueString: ", dData.ValueString)
-			dData.Value = dData.Unit.Value(dData.RawValue)
-			records = append(records, dData)
-		}
-	}
-
-	return records, nil
-}
-
-func (lf LongFrame) DecodeManufacturer() (string, error) {
-	id := int(binary.LittleEndian.Uint16(lf[11:13]))
-	return fmt.Sprintf(
-		"%c%c%c",
-		rune(((id>>10)&0x001F)+64),
-		rune(((id>>5)&0x001F)+64),
-		rune((id&0x001F)+64),
-	), nil
-}
-
-type DecodedDataRecord struct {
-	Function      string
-	StorageNumber int
-
-	Tariff int
-	Device int
-
-	Unit     Unit
-	Exponent float64
-	Type     string
-	Quantity string
-
-	Value       float64
-	ValueString string
-	RawValue    float64
-
-	HasMoreRecords bool
-}
-
-type DecodedFrame struct {
-	raw          []byte
-	SerialNumber int
-	Manufacturer string
-	ProductName  string
-	Version      int
-	DeviceType   string
-	AccessNumber int16
-
-	Signature int16
-
-	Status int
-	// ReadableStatus string // TODO make function on struct!
-
-	DataRecords []DecodedDataRecord
-}
-
-func (df DecodedFrame) HasMoreRecords() bool {
-	if len(df.DataRecords) == 0 {
-		return false
-	}
-	return df.DataRecords[len(df.DataRecords)-1].HasMoreRecords
-}
-
-func (df DecodedFrame) SecondaryAddressString() string {
-	// 4 bytes being the device ID (serial #)
-	// 2 bytes being the manufacturer’s identifier
-	// 1 byte being the device version
-	// 1 byte being the device media
-	return strconv.Itoa(df.SerialNumber) + hex.EncodeToString(df.raw[11:14])
-}
-
-const SingleCharacterFrame = 0xe5
-
+// C is a typed C-field byte exposing FCB/FCV bit accessors.
 type C byte
 
-// FCB Frame Count-Bit.
-func (c C) FCB() bool {
-	return (c & CONTROL_MASK_FCB) > 0
-}
+// FCB reports whether the Frame Count Bit is set.
+func (c C) FCB() bool { return c&ControlMaskFcb != 0 }
 
-// FCV Frame Count Valid indicates we want to use frame counting in the following request/responses.
-func (c C) FCV() bool {
-	return (c & CONTROL_MASK_FCV) > 0
-}
+// FCV reports whether the Frame Count Valid bit is set.
+func (c C) FCV() bool { return c&ControlMaskFcv != 0 }

@@ -1,0 +1,112 @@
+version: "2"
+
+run:
+  timeout: 3m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    # core correctness
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose
+    - errorlint
+    - nilerr
+    - nilnesserr
+    - noctx
+    - rowserrcheck
+    - sqlclosecheck
+
+    # style / readability
+    - gocritic
+    - revive
+    - misspell
+    - unconvert
+    - unparam
+    - prealloc
+    - dogsled
+    - copyloopvar
+    - intrange
+    - whitespace
+
+    # security / best practices
+    - gosec
+    - bidichk
+    - asciicheck
+    - predeclared
+
+    # complexity
+    - gocyclo
+
+    # tests
+    - testifylint
+    - thelper
+    - tparallel
+
+    # tooling hygiene
+    - nolintlint
+
+  settings:
+    gocyclo:
+      min-complexity: 25
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: empty-block
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: unused-parameter
+          disabled: true
+        - name: var-declaration
+        - name: var-naming
+    gocritic:
+      disabled-checks:
+        - ifElseChain    # frame.go decode loop is intentionally an if-chain
+    gosec:
+      excludes:
+        - G115           # int↔byte conversions are integral to M-Bus
+    nolintlint:
+      require-specific: true
+      require-explanation: true
+
+  exclusions:
+    presets:
+      - common-false-positives
+    rules:
+      - path: _test\.go$
+        linters:
+          - gosec        # tests construct deliberate edge-case inputs
+          - gocyclo
+          - errcheck     # asserting test wiring; failures fail the test
+          - noctx        # tests use net.Listen for local sockets
+      - path: example/
+        linters:
+          - errcheck
+          - gosec
+      - path: cmd/
+        linters:
+          - gosec
+
+formatters:
+  enable:
+    - gofmt
+    - gofumpt
+    - goimports

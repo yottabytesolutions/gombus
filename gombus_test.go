@@ -1,186 +1,235 @@
 package gombus
 
 import (
-	"encoding/hex"
+	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
-	"strings"
 	"testing"
-
-	"github.com/sirupsen/logrus"
-	"github.com/stretchr/testify/assert"
+	"time"
 )
 
 func TestMain(m *testing.M) {
-	// call flag.Parse() here if TestMain uses flags
-	logrus.SetLevel(logrus.DebugLevel)
+	slog.SetLogLoggerLevel(slog.LevelDebug)
 	os.Exit(m.Run())
 }
 
-func TestToBCD(t *testing.T) {
-	// facit: 78 56 34 12 identification number = 12345678
-	s := fmt.Sprintf("% x", uintToBCD(12345678, 4))
-	assert.Equal(t, "78 56 34 12", s)
-}
-func TestFromBCD(t *testing.T) {
-	// facit: 78 56 34 12 identification number = 12345678
-	h, err := hex.DecodeString("78563412")
-	assert.NoError(t, err)
+// TestAddressValidators pins the two rules against each other. A destination may
+// be 0xFD or 0xFE; an address written into a meter may not, because writing 0xFE
+// makes the meter answer every broadcast and cannot be undone over the bus. The
+// shared table makes a future merge of the two validators fail loudly.
+func TestAddressValidators(t *testing.T) {
+	cases := []struct {
+		name          string
+		addr          uint8
+		wantDestErr   bool
+		wantAssignErr bool
+	}{
+		{name: "zero is unconfigured", addr: 0, wantDestErr: true, wantAssignErr: true},
+		{name: "lowest meter address", addr: 1},
+		{name: "typical", addr: 42},
+		{name: "highest meter address", addr: 250},
+		{name: "251 reserved", addr: 251, wantDestErr: true, wantAssignErr: true},
+		{name: "252 reserved", addr: 252, wantDestErr: true, wantAssignErr: true},
+		{
+			name:          "253 is a legal destination but must never be written",
+			addr:          253,
+			wantAssignErr: true,
+		},
+		{
+			name:          "254 broadcast-with-reply reads fine but bricks if written",
+			addr:          254,
+			wantAssignErr: true,
+		},
+		{
+			name:          "255 broadcast without reply can never answer",
+			addr:          255,
+			wantDestErr:   true,
+			wantAssignErr: true,
+		},
+	}
 
-	i := bcdToInt(h)
-	assert.Equal(t, 12345678, i)
-}
-
-func TestCheckKthBitSet(t *testing.T) {
-	assert.True(t, checkKthBitSet(0x80, 7))
-	assert.False(t, checkKthBitSet(0xf, 7))
-	assert.False(t, checkKthBitSet(0x2a, 7))
-	assert.True(t, checkKthBitSet(0x40, 6))
-}
-
-func TestPrimaryUsingSecondary(t *testing.T) {
-	data := SetPrimaryUsingSecondary(19004636, 2)
-	s := fmt.Sprintf("% x", data)
-	assert.Equal(t, "68 0e 0e 68 73 fd 51 36 46 00 19 ff ff ff ff 01 7a 02 cf 16", s)
-}
-
-func TestPrimaryUsingPrimary(t *testing.T) {
-	data := SetPrimaryUsingPrimary(0, 3)
-	s := fmt.Sprintf("% x", data)
-	assert.Equal(t, "68 06 06 68 73 00 51 01 7a 03 42 16", s)
-}
-func TestDecodeLongFrameGAROSecondFrame(t *testing.T) {
-	// Response from garo electric meter
-	s := `
-		68 78 78 68 
-		08 01 72 
-		14 21 07 90
-		36 1c 
-		c7 
-		02 
-		25 
-		00 
-		00 00 
-		84 40 2a a0 09 00 00
-		84 80 40 2a ba 00 00 00 
-		84 c0 40 2a 00 00 00 00 
-		84 40 fb 97 72 fb fe ff ff 
-		84 80 40 fb 97 72 4b 00 00 00 
-		84 c0 40 fb 97 72 00 00 00 00 
-		84 40 fb b7 72 ae 09 00 00 
-		84 80 40 fb b7 72 c8 00 00 00 
-		84 c0 40 fb b7 72 00 00 00 00 
-		82 40 fd ba 73 e2 03 
-		82 80 40 fd ba 73 9f 03 
-		82 c0 40 fd ba 73 00 00 1f 
-		ef 16`
-	// 0x84 == 10000100 , 1000 = extension bit 1,  0100 == 32 bit integer // https://m-bus.com/documentation-wired/06-application-layer
-	// DIF:
-	// 7 extension bit
-	// 6 LSB always 0
-	// 5 function field
-	// 4 function field (2 bytes) 00 == Instantaneous Value
-	// 3 data field for example 0100 == 32 bit integer
-	// 2 data field
-	// 1 data field
-	// 0 data field
-
-	// DIFE
-	// 0x40 == 01000000
-	// 0x80 == 10000000
-	// 0xc0 == 11000000
-	// 7 extension bit
-	// 6 (device) unit 0 = reactive, 1=apparent
-	// 5 tariff
-	// 4 tariff
-	// 3 storagenumber
-	// 2 storagenumber
-	// 1 storagenumber
-	// 0 storagenumber
-
-	// VIF
-	// 0x2a == 00101010 == E010 1010	Reserved
-	// 7 extension bit
-	// 6 unit and multiplier
-	// 5 unit and multiplier
-	// 4 unit and multiplier
-	// 3 unit and multiplier
-	// 2 unit and multiplier
-	// 1 unit and multiplier
-	// 0 unit and multiplier 7 bits total
-
-	// VIFE
-	// inget för extension bit == 0
-	// DATA
-	// a0 09 00 00
-
-	s = strings.ReplaceAll(s, " ", "")
-	s = strings.ReplaceAll(s, "\n", "")
-	s = strings.ReplaceAll(s, "\t", "")
-	data, err := hex.DecodeString(s)
-	assert.NoError(t, err)
-
-	frame := LongFrame(data)
-
-	dFrame, err := frame.Decode()
-	assert.NoError(t, err)
-	assert.Equal(t, 90072114, dFrame.SerialNumber)
-
-	// fmt.Printf("%#v\n", dFrame)
-	// spew.Dump(dFrame)
-}
-func TestDecodeLongFrameGAROFirstFrame(t *testing.T) {
-	s := `68 65 65 68 08 01 72 14 21 07 90 36 1c c7 02 4d 00 00 00 04 05 9c 31 01 00 04 fb 82 75 63 91 00 00 04 2a 36 08 00 00 04 fb 97 72 ca fe ff ff 04 fb b7 72 6d 08 00 00 02 fd ba 73 dc 03 84 80 80 40 fd 48 c4 0f 00 00 04 fd 48 1a 09 00 00 84 40 fd 59 d2 04 00 00 84 80 40 fd 59 78 00 00 00 84 c0 40 fd 59 00 00 00 00 1f 95 16`
-	s = strings.ReplaceAll(s, " ", "")
-	data, err := hex.DecodeString(s)
-	assert.NoError(t, err)
-
-	frame := LongFrame(data)
-	dFrame, err := frame.Decode()
-	assert.NoError(t, err)
-	assert.Equal(t, 90072114, dFrame.SerialNumber)
-
-	// fmt.Printf("%#v\n", dFrame)
-	// spew.Dump(dFrame)
-	assert.True(t, dFrame.HasMoreRecords())
-}
-func TestDecodeLongFrameItronFirstFrame(t *testing.T) {
-	s := `68 56 56 68 08 02 72 36 46 00 19 77 04 14 07 9d 10 00 00 0c 78 36 46 00 19 0d 7c 08 44 49 20 2e 74 73 75 63 0a 20 20 20 20 20 20 20 20 20 20 04 6d 35 14 d3 26 02 7c 09 65 6d 69 74 20 2e 74 61 62 97 10 04 13 01 6e 03 00 04 93 7f 00 00 00 00 44 13 27 51 03 00 0f 00 00 1f 96 16`
-	s = strings.ReplaceAll(s, " ", "")
-	data, err := hex.DecodeString(s)
-	assert.NoError(t, err)
-
-	frame := LongFrame(data)
-	dFrame, err := frame.Decode()
-	assert.NoError(t, err)
-	assert.Equal(t, 19004636, dFrame.SerialNumber)
-
-	// fmt.Printf("%#v\n", dFrame)
-	// spew.Dump(dFrame)
-	fmt.Println("number of records: ", len(dFrame.DataRecords))
-	assert.True(t, dFrame.HasMoreRecords())
-	assert.Len(t, dFrame.DataRecords, 9)
-	assert.Equal(t, 217383.0, dFrame.DataRecords[6].RawValue)
-	assert.Equal(t, "bat. time", dFrame.DataRecords[3].Unit.Unit)
-	assert.Equal(t, "cust. ID", dFrame.DataRecords[1].Unit.Unit)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertAddrErr(t, "validateDestinationAddr", validateDestinationAddr(tc.addr), tc.wantDestErr, tc.addr)
+			assertAddrErr(t, "validateAssignableAddr", validateAssignableAddr(tc.addr), tc.wantAssignErr, tc.addr)
+		})
+	}
 }
 
-func Testnnt24ToInt(t *testing.T) {
-	// 03 13 15 31 00 Data block 1: unit 0, storage No 0, no tariff, instantaneous volume, 12565 l (24 bit integer)
-	d := []byte{0x15, 0x31, 0x0}
-	res := int24ToInt(d)
-	assert.Equal(t, 12565, res)
+func assertAddrErr(t *testing.T, fn string, err error, wantErr bool, addr uint8) {
+	t.Helper()
+	if wantErr {
+		if !errors.Is(err, ErrInvalidPrimaryID) {
+			t.Fatalf("%s(%d): expected errors.Is(err, ErrInvalidPrimaryID), got %v", fn, addr, err)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("%s(%d): unexpected error: %v", fn, addr, err)
+	}
 }
 
-// Example for a RSP_UD with variable data structure answer (mode 1):
-// (all values are hex.)
+// TestReadFramesRejectInvalidDestination checks that both entry points refuse an
+// unusable destination before touching the bus. Previously primaryID was an int
+// truncated to uint8 at the call to RequestUD2, so 300 silently addressed 44.
+func TestReadFramesRejectInvalidDestination(t *testing.T) {
+	ctx := t.Context()
+	reads := []struct {
+		name string
+		read func(Conn, uint8) error
+	}{
+		{
+			name: "ReadAllFrames",
+			read: func(c Conn, a uint8) error { _, err := NewClient(c).ReadAllFrames(ctx, a); return err },
+		},
+		{
+			name: "ReadSingleFrame",
+			read: func(c Conn, a uint8) error { _, err := NewClient(c).ReadSingleFrame(ctx, a); return err },
+		},
+	}
+	addrs := []struct {
+		name string
+		addr uint8
+	}{
+		{name: "zero", addr: 0},
+		{name: "reserved 251", addr: 251},
+		{name: "broadcast without reply", addr: 255},
+	}
 
-// 68 1F 1F 68 header of RSP_UD telegram (length 1Fh=31d bytes)
-// 08 02 72 C field = 08 (RSP), address 2, CI field 72H (var.,LSByte first)
-// 78 56 34 12 identification number = 12345678
-// 24 40 01 07 manufacturer ID = 4024h (PAD in EN 61107), generation 1, water
-// 55 00 00 00 TC = 55h = 85d, Status = 00h, Signature = 0000h
-// 03 13 15 31 00 Data block 1: unit 0, storage No 0, no tariff, instantaneous volume, 12565 l (24 bit integer)
-// DA 02 3B 13 01 Data block 2: unit 0, storage No 5, no tariff, maximum volume flow, 113 l/h (4 digit BCD)
-// 8B 60 04 37 18 02 Data block 3: unit 1, storage No 0, tariff 2, instantaneous energy, 218,37 kWh (6 digit BCD)
-// 18 16 checksum and stopsign
+	for _, r := range reads {
+		for _, a := range addrs {
+			t.Run(r.name+"/"+a.name, func(t *testing.T) {
+				conn := &countingWriteConn{}
+				if err := r.read(conn, a.addr); !errors.Is(err, ErrInvalidPrimaryID) {
+					t.Fatalf("expected errors.Is(err, ErrInvalidPrimaryID), got %v", err)
+				}
+				if conn.writes != 0 {
+					t.Fatalf("wrote %d frame(s) to the bus for address %d, want 0", conn.writes, a.addr)
+				}
+			})
+		}
+	}
+}
+
+// TestReadFramesAcceptBroadcastReply pins the workflow mbusctl documents at the
+// -addr flag: reading from 0xFE on a single-meter bus. A validator that treats
+// the destination and the written address as one rule breaks this.
+func TestReadFramesAcceptBroadcastReply(t *testing.T) {
+	for _, addr := range []uint8{addrSecondarySelect, addrBroadcastReply} {
+		t.Run(fmt.Sprintf("addr %d", addr), func(t *testing.T) {
+			conn := &countingWriteConn{}
+			// The conn never answers, so this must fail at the read, never at
+			// validation. Reaching a timeout proves the address was accepted.
+			err := func() error { _, err := NewClient(conn).ReadSingleFrame(t.Context(), addr); return err }()
+			if errors.Is(err, ErrInvalidPrimaryID) {
+				t.Fatalf("address %d must be a valid destination, got %v", addr, err)
+			}
+			if conn.writes == 0 {
+				t.Fatalf("expected a REQ_UD2 to be sent to %d", addr)
+			}
+		})
+	}
+}
+
+// countingWriteConn records writes and never answers, so a rejected address is
+// visible as zero bus traffic.
+type countingWriteConn struct {
+	mockConn
+	writes int
+}
+
+func (c *countingWriteConn) Write(b []byte) (int, error) {
+	c.writes++
+	return len(b), nil
+}
+
+// TestReadAllFramesSilentMeter covers the user-facing path: ReadAllFrames waits
+// for the SND_NKE ack via ReadSingleCharFrame, so a meter that never answers
+// must surface as a timeout there rather than hanging the caller.
+func TestReadAllFramesSilentMeter(t *testing.T) {
+	for _, tc := range silentConns() {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := tc.conn()
+			assertSilentReadTimesOut(t, conn, func() error {
+				_, err := NewClient(conn).ReadAllFrames(t.Context(), 1)
+				return err
+			})
+		})
+	}
+}
+
+// chattyConn answers every REQ_UD2 with the same frame, which carries the 0x1F
+// "more records follow" sentinel. It models a slave whose FCB walk never ends.
+type chattyConn struct {
+	frame   []byte
+	pending []byte
+	writes  int
+}
+
+func (c *chattyConn) Read(b []byte) (int, error) {
+	if len(c.pending) == 0 {
+		return 0, nil
+	}
+	n := copy(b, c.pending)
+	c.pending = c.pending[n:]
+	return n, nil
+}
+
+func (c *chattyConn) Write(b []byte) (int, error) {
+	c.writes++
+	if c.writes == 1 {
+		c.pending = append(c.pending, SingleCharacterFrame) // ack to SND_NKE
+	} else {
+		c.pending = append(c.pending, c.frame...)
+	}
+	return len(b), nil
+}
+
+func (*chattyConn) SetReadDeadline(time.Time) error  { return nil }
+func (*chattyConn) SetWriteDeadline(time.Time) error { return nil }
+func (*chattyConn) Close() error                     { return nil }
+
+// TestReadAllFramesBoundsFCBWalk pins the fix for the unbounded walk. A slave
+// that always sets the more-records sentinel must produce an error, not grow
+// the frame slice until the process dies.
+func TestReadAllFramesBoundsFCBWalk(t *testing.T) {
+	// Real frame ending in the 0x1F sentinel, so HasMoreRecords stays true.
+	conn := &chattyConn{
+		frame: hexToBytes(`
+			68 78 78 68 08 01 72 14 21 07 90 36 1c c7 02 25 00 00 00
+			84 40 2a a0 09 00 00
+			84 80 40 2a ba 00 00 00
+			84 c0 40 2a 00 00 00 00
+			84 40 fb 97 72 fb fe ff ff
+			84 80 40 fb 97 72 4b 00 00 00
+			84 c0 40 fb 97 72 00 00 00 00
+			84 40 fb b7 72 ae 09 00 00
+			84 80 40 fb b7 72 c8 00 00 00
+			84 c0 40 fb b7 72 00 00 00 00
+			82 40 fd ba 73 e2 03
+			82 80 40 fd ba 73 9f 03
+			82 c0 40 fd ba 73 00 00 1f
+			ef 16`),
+	}
+
+	type result struct {
+		frames []*DecodedFrame
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		frames, err := NewClient(conn).ReadAllFrames(context.Background(), 1)
+		done <- result{frames, err}
+	}()
+
+	select {
+	case got := <-done:
+		if !errors.Is(got.err, ErrTooManyFrames) {
+			t.Fatalf("expected errors.Is(err, ErrTooManyFrames), got %v after %d frames", got.err, len(got.frames))
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("ReadAllFrames did not return; walked at least %d frames", conn.writes)
+	}
+}

@@ -1,0 +1,27 @@
+gombus
+Copyright 2024-2026 Yottabyte Solutions
+
+This product includes software originally developed by Jonas Falck
+(https://github.com/jonaz/gombus), Copyright 2022-2024 Jonas Falck,
+licensed under the Apache License, Version 2.0.
+
+This is a fork. It is maintained independently of the original project and
+is not endorsed by the original author. See README.md for the list of
+changes made since the fork.
+
+---
+
+This product includes test data from the libmbus project
+(https://github.com/rscada/libmbus), Copyright (c) 2010-2012 Raditex Control AB,
+licensed under the BSD 3-Clause License.
+
+The M-Bus frame fixtures in testdata/frames/ and testdata/error-frames/, and the
+reference decodings in testdata/libmbus-xml/, are redistributed from that
+corpus. The full BSD 3-Clause licence text, as required for redistribution in
+source form, is in testdata/LICENSE.libmbus.
+
+Neither the name of Raditex Control AB nor the names of its contributors are
+used to endorse or promote this fork.
+
+testdata/frames/Meterlogger-response.hex is not from libmbus. It was captured
+from a Kamstrup MULTICAL 603 by the Meterlogger project.
