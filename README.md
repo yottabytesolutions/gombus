@@ -57,6 +57,24 @@ func main() {
 }
 ```
 
+To pick specific readings instead of scanning `DataRecords` by hand:
+
+```go
+// Current instantaneous power, with real error reporting (no silent zeros).
+power, err := frame.Value(gombus.VIFPowerW, gombus.FunctionInstantaneous)
+
+// The meter's own clock.
+ts, ok := frame.Timestamp()
+
+// Arbitrary queries: historic values, tariff registers, sub-devices.
+lastPeriod, ok := frame.Find(
+	gombus.MatchType(gombus.VIFEnergyWh),
+	gombus.MatchStorage(1))
+tariffs := frame.FindAll(
+	gombus.MatchType(gombus.VIFEnergyWh),
+	gombus.MatchFunction(gombus.FunctionInstantaneous))
+```
+
 For multi-frame meters use `ReadAllFrames`, which walks the FCB bit until
 the slave reports no more records.
 
