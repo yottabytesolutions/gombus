@@ -22,13 +22,13 @@ func decodeRecordFunction(dif byte) string {
 	}
 	switch dif & DataRecordDifMaskFunction {
 	case 0x00:
-		return "Instantaneous value"
+		return FunctionInstantaneous
 	case 0x10:
-		return "Maximum value"
+		return FunctionMaximum
 	case 0x20:
-		return "Minimum value"
+		return FunctionMinimum
 	case 0x30:
-		return "Value during error state"
+		return FunctionDuringError
 	default:
 		return "Unknown"
 	}
