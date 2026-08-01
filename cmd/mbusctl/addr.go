@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 )
 
@@ -24,18 +25,26 @@ const (
 )
 
 // destinationAddr range-checks an address a frame will be SENT TO, so it also
-// accepts 0xFD and 0xFE. Range-checking happens before the narrowing
+// accepts 0xFD and 0xFE. The byte-range check comes before the narrowing
 // conversion: converting first wraps silently, turning 300 into meter 44.
 func destinationAddr(value int) (uint8, error) {
-	valid := (value >= minPrimaryAddr && value <= maxPrimaryAddr) ||
-		value == addrSecondarySelect || value == addrBroadcastReply
-	if !valid {
-		return 0, fmt.Errorf(
-			"address to read from must be %d..%d, %d (secondary select) or %d (broadcast with reply)",
-			minPrimaryAddr, maxPrimaryAddr, addrSecondarySelect, addrBroadcastReply,
-		)
+	if value < 0 || value > math.MaxUint8 {
+		return 0, errBadDestination()
 	}
-	return uint8(value), nil
+	addr := uint8(value)
+	valid := (addr >= minPrimaryAddr && addr <= maxPrimaryAddr) ||
+		addr == addrSecondarySelect || addr == addrBroadcastReply
+	if !valid {
+		return 0, errBadDestination()
+	}
+	return addr, nil
+}
+
+func errBadDestination() error {
+	return fmt.Errorf(
+		"address to read from must be %d..%d, %d (secondary select) or %d (broadcast with reply)",
+		minPrimaryAddr, maxPrimaryAddr, addrSecondarySelect, addrBroadcastReply,
+	)
 }
 
 // assignableAddr range-checks an address that will be WRITTEN INTO a meter as
