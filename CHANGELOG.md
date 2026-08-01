@@ -32,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   secondary reads and wireless decoding.
 - `CHANGELOG.md`, and a README covering the new surface.
 
+### Fixed
+
+- VIF extension types no longer collide with primary VIF types in `Unit.Type`.
+  An error-flags record (VIF 0xFD, VIFE 0x17) used to match
+  `MatchType(VIFVolume)`. Extension types now carry a 0x100/0x200 offset,
+  named by the new `VIFExt` constants.
+
 ## [1.0.0] - 2026-07-31
 
 First stable release of the fork.
