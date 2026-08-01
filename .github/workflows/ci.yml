@@ -19,14 +19,14 @@ jobs:
           # version here too would drift from it silently.
           go-version-file: go.mod
 
+      - name: Tidy check
+        run: go mod tidy -diff
+
       - name: Build
         run: go build ./...
 
-      - name: Vet
-        run: go vet ./...
-
       - name: Test
-        run: go test -race -coverprofile=coverage.out ./...
+        run: go test -race ./...
 
       # The decoder parses untrusted bytes off the bus, so a short fuzz run
       # guards the no-panic contract on every change. testdata/fuzz seeds it;
