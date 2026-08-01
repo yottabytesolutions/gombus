@@ -10,9 +10,19 @@ import (
 	"time"
 )
 
-// ErrUnsupportedCI is returned by LongFrame.Decode when the CI field is not
-// 0x72 (variable data response, the only mode currently supported).
-var ErrUnsupportedCI = errors.New("unsupported CI field (only 0x72 variable data response is supported)")
+// CI fields LongFrame.Decode understands. Both are mode 1 (LSB first); the
+// mode 2 responses 0x76 and 0x77 send multibyte values MSB first and are not
+// decoded.
+const (
+	ciVariableDataMode1 = 0x72
+	ciFixedDataMode1    = 0x73
+)
+
+// ErrUnsupportedCI is returned by LongFrame.Decode when the CI field is neither
+// 0x72 (variable data response) nor 0x73 (fixed data response).
+var ErrUnsupportedCI = errors.New(
+	"unsupported CI field (only 0x72 variable and 0x73 fixed data responses are supported)",
+)
 
 // errShortDataRecord is wrapped by every truncation error during data-record
 // decoding so a caller can errors.Is against ErrInvalidFrame for the broader
@@ -85,9 +95,9 @@ type DecodedFrame struct {
 	DataRecords []DecodedDataRecord
 }
 
-// Decode parses a variable-data response (CI=0x72). It returns
-// ErrUnsupportedCI for any other CI field, and ErrInvalidFrame (wrapped) for
-// bounds or consistency violations.
+// Decode parses a variable-data response (CI=0x72) or a fixed-data response
+// (CI=0x73). It returns ErrUnsupportedCI for any other CI field, and
+// ErrInvalidFrame (wrapped) for bounds or consistency violations.
 func (lf LongFrame) Decode() (*DecodedFrame, error) {
 	// Variable-data response header (after the 4-byte 68 LL LL 68 start) is:
 	//   C(1) A(1) CI(1) | ID(4) Mfr(2) Ver(1) Med(1) AN(1) Status(1) Sig(2)
@@ -96,7 +106,12 @@ func (lf LongFrame) Decode() (*DecodedFrame, error) {
 	if len(lf) < 21 {
 		return nil, fmt.Errorf("%w: long frame too short (%d bytes)", ErrInvalidFrame, len(lf))
 	}
-	if lf.CI() != 0x72 {
+	switch lf.CI() {
+	case ciVariableDataMode1:
+		// Decoded below; the fixed structure shares none of that code.
+	case ciFixedDataMode1:
+		return lf.decodeFixed()
+	default:
 		return nil, ErrUnsupportedCI
 	}
 

@@ -2,6 +2,7 @@ package gombus
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -125,5 +126,27 @@ func TestTimestamp(t *testing.T) {
 
 	if _, ok := (DecodedFrame{}).Timestamp(); ok {
 		t.Fatal("Timestamp on a frame without date records should report false")
+	}
+}
+
+// The WaterStar sends an error-flags record (01 FD 17). Before extension
+// types were offset into their own namespace it decoded with the same
+// Unit.Type as a volume record, so MatchType(VIFVolume) returned it.
+func TestExtensionTypesDoNotCollideWithPrimary(t *testing.T) {
+	data := loadHexFixture(t, filepath.Join("testdata", "frames", "EFE_Engelmann-WaterStar.hex"))
+	df, err := LongFrame(data).Decode()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	flags := df.FindAll(MatchType(VIFExtErrorFlags))
+	if len(flags) != 1 {
+		t.Fatalf("MatchType(VIFExtErrorFlags) matched %d records; want 1", len(flags))
+	}
+
+	for _, r := range df.FindAll(MatchType(VIFVolume)) {
+		if r.Unit.Type == VIFExtErrorFlags || r.Unit.Unit == "none" {
+			t.Fatalf("volume query returned a non-volume record: %+v", r)
+		}
 	}
 }

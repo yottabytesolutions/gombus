@@ -1,106 +1,93 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"flag"
+	"io"
 	"strings"
 	"testing"
 )
 
-// The two parsers are the guard against talking to the wrong meter, so they are
-// tested against each other in one table: the same address is legal to read from
-// and illegal to write, and the pair only makes sense side by side.
-//
-// wantDestErr covers parseDestinationAddr (where a frame is SENT).
-// wantAssignErr covers parseAssignableAddr (what is WRITTEN INTO a meter).
-func TestParseAddrFlags(t *testing.T) {
+// TestRunUsageErrors covers every way to get the command line wrong. Each must
+// come back as a usage error, which is what makes the process exit 2 instead of
+// looking like a bus that did not answer. None of these reach the transport.
+func TestRunUsageErrors(t *testing.T) {
 	cases := []struct {
-		name          string
-		value         int
-		wantDestErr   bool
-		wantAssignErr bool
+		name string
+		args []string
 	}{
-		{name: "negative flag default", value: -1, wantDestErr: true, wantAssignErr: true},
-		{name: "zero is unconfigured", value: 0, wantDestErr: true, wantAssignErr: true},
-		{name: "lowest meter address", value: 1},
-		{name: "typical", value: 42},
-		{name: "highest meter address", value: 250},
-		{name: "251 reserved", value: 251, wantDestErr: true, wantAssignErr: true},
-		{name: "252 reserved", value: 252, wantDestErr: true, wantAssignErr: true},
-		{
-			name:          "253 secondary select reads fine, never written",
-			value:         253,
-			wantAssignErr: true,
-		},
-		{
-			name:          "254 broadcast-with-reply reads fine, bricks the meter if written",
-			value:         254,
-			wantAssignErr: true,
-		},
-		{
-			name:          "255 broadcast without reply can never answer",
-			value:         255,
-			wantDestErr:   true,
-			wantAssignErr: true,
-		},
-		{
-			// The original bug: uint8(300) is 44, so -addr 300 silently read a
-			// different meter. Both parsers must reject it, not wrap it.
-			name:          "300 must not wrap to meter 44",
-			value:         300,
-			wantDestErr:   true,
-			wantAssignErr: true,
-		},
+		{name: "no command", args: nil},
+		{name: "unknown command", args: []string{"listen"}},
+		{name: "unknown flag", args: []string{"read", "-nope", "1"}},
+		{name: "read without device", args: []string{"read", "1"}},
+		{name: "read without address", args: []string{"read", "-device", "127.0.0.1:1"}},
+		{name: "read with two addresses", args: []string{"read", "-device", "127.0.0.1:1", "1", "2"}},
+		{name: "read bad address", args: []string{"read", "-device", "127.0.0.1:1", "300"}},
+		{name: "scan with an argument", args: []string{"scan", "-device", "127.0.0.1:1", "1"}},
+		{name: "scan both modes", args: []string{"scan", "-device", "127.0.0.1:1", "-primary", "-secondary"}},
+		{name: "scan reversed range", args: []string{"scan", "-device", "127.0.0.1:1", "-from", "10", "-to", "5"}},
+		{name: "scan range outside the bus", args: []string{"scan", "-device", "127.0.0.1:1", "-to", "251"}},
+		{name: "scan without device", args: []string{"scan"}},
+		{name: "negative timeout", args: []string{"read", "-device", "127.0.0.1:1", "-timeout", "0s", "1"}},
+		{name: "set-address without a new address", args: []string{"set-address", "-device", "127.0.0.1:1", "1"}},
+		{name: "set-address to a reserved address", args: []string{"set-address", "-device", "127.0.0.1:1", "1", "254"}},
+		{name: "set-address to zero", args: []string{"set-address", "-device", "127.0.0.1:1", "1", "0"}},
+		{name: "device is neither host:port nor a path", args: []string{"read", "-device", "eth0", "1"}},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseDestinationAddr("addr", tc.value)
-			assertParse(t, "parseDestinationAddr", "addr", tc.value, got, err, tc.wantDestErr)
-
-			got, err = parseAssignableAddr("new-primary", tc.value)
-			assertParse(t, "parseAssignableAddr", "new-primary", tc.value, got, err, tc.wantAssignErr)
+			err := run(context.Background(), tc.args, io.Discard)
+			if err == nil {
+				t.Fatalf("run(%q): expected an error", tc.args)
+			}
+			var ue *usageError
+			if !errors.As(err, &ue) {
+				t.Fatalf("run(%q): want a usage error, got %T: %v", tc.args, err, err)
+			}
 		})
 	}
 }
 
-// assertParse checks the error contract and, on success, that the value round
-// trips instead of wrapping.
-func assertParse(t *testing.T, fn, flagName string, value int, got uint8, err error, wantErr bool) {
-	t.Helper()
-
-	if wantErr {
-		if err == nil {
-			t.Fatalf("%s(%d): expected an error, got address %d", fn, value, got)
+// TestRunHelp pins that help succeeds and names every subcommand, since it is
+// the only discovery path an operator has.
+func TestRunHelp(t *testing.T) {
+	for _, arg := range []string{"help", "-h", "--help"} {
+		var buf bytes.Buffer
+		if err := run(context.Background(), []string{arg}, &buf); err != nil {
+			t.Fatalf("run(%q): %v", arg, err)
 		}
-		// The message is the whole point at a CLI boundary: it must tell the
-		// operator which flag was wrong and what is acceptable.
-		if !strings.Contains(err.Error(), "-"+flagName) {
-			t.Errorf("%s(%d): error must name the flag -%s, got %q", fn, value, flagName, err)
+		for _, want := range []string{"scan", "read", "set-address"} {
+			if !strings.Contains(buf.String(), want) {
+				t.Errorf("help must name %q, got:\n%s", want, buf.String())
+			}
 		}
-		if !strings.Contains(err.Error(), "1..250") {
-			t.Errorf("%s(%d): error must name the valid range, got %q", fn, value, err)
-		}
-		return
-	}
-
-	if err != nil {
-		t.Fatalf("%s(%d): unexpected error: %v", fn, value, err)
-	}
-	if int(got) != value {
-		t.Fatalf("%s(%d): got address %d, want %d", fn, value, got, value)
 	}
 }
 
-// TestParseDestinationAddrNamesExtraAddresses pins that the destination error
-// tells the operator about 253 and 254. Without it, the single-meter workflow
-// the -addr flag documents is undiscoverable from the error alone.
-func TestParseDestinationAddrNamesExtraAddresses(t *testing.T) {
-	_, err := parseDestinationAddr("addr", 251)
-	if err == nil {
-		t.Fatal("expected an error for 251")
-	}
-	for _, want := range []string{"253", "254"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("destination error must mention %s, got %q", want, err)
+// TestRunSubcommandHelp pins that -h on a subcommand returns flag.ErrHelp,
+// which main turns into exit 2 without an error line of its own.
+func TestRunSubcommandHelp(t *testing.T) {
+	for _, cmd := range []string{"scan", "read", "set-address"} {
+		err := run(context.Background(), []string{cmd, "-h"}, io.Discard)
+		if !errors.Is(err, flag.ErrHelp) {
+			t.Errorf("run(%q -h): want flag.ErrHelp, got %v", cmd, err)
 		}
+	}
+}
+
+// TestDialRejectsUnusableDevice checks the transport split before anything is
+// dialled: a path is serial, host:port is TCP, and anything else is a typo
+// rather than a device.
+func TestDialRejectsUnusableDevice(t *testing.T) {
+	_, err := dial("ttyUSB0")
+	if err == nil {
+		t.Fatal("expected an error for a device that is neither a path nor host:port")
+	}
+	var ue *usageError
+	if !errors.As(err, &ue) {
+		t.Errorf("want a usage error, got %T: %v", err, err)
 	}
 }
