@@ -4,9 +4,11 @@
 // # Scope
 //
 // gombus is master-side: it builds the short and long frames a master sends
-// on the bus, reads the slave's variable-data response (CI=0x72), and
-// decodes it into structured data records. CI fields other than 0x72 are
-// not interpreted; the package returns [ErrUnsupportedCI] for those.
+// on the bus, reads the slave's variable-data response (CI=0x72) or fixed-data
+// response (CI=0x73), and decodes either into structured data records. A fixed
+// response yields one record per counter, so the same queries work on both.
+// Other CI fields are not interpreted; the package returns [ErrUnsupportedCI]
+// for those.
 //
 // Manufacturer-specific data following a 0x0F or 0x1F DIF byte is exposed
 // only as a sentinel record and is not parsed further.

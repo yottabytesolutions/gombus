@@ -11,6 +11,12 @@ import (
 // forever.
 const writeTimeout = 2 * time.Second
 
+// defaultProbeTimeout is how long a scan waits for an address to start
+// answering before calling it silent. EN 13757-2 requires a slave to begin its
+// reply within 330 bit times, which is well under this even at 300 baud. It is
+// far shorter than frameReadTimeout because a scan pays it once per address.
+const defaultProbeTimeout = 500 * time.Millisecond
+
 // Client is an M-Bus master session over one transport.
 //
 // It owns the bytes that have arrived from the Conn but not yet been consumed
@@ -27,14 +33,18 @@ type Client struct {
 	conn Conn
 	buf  []byte // read from conn, not yet consumed by a frame
 	tmp  []byte // scratch for a single transport Read
+	// probeTimeout is how long a scan waits for a slave to start answering.
+	// It bounds silence only: once bytes arrive the frame timeout takes over.
+	probeTimeout time.Duration
 }
 
 // NewClient returns a Client that reads and writes M-Bus frames over conn.
 // Any Conn works: see [Conn].
 func NewClient(conn Conn) *Client {
 	return &Client{
-		conn: conn,
-		tmp:  make([]byte, readChunkSize),
+		conn:         conn,
+		tmp:          make([]byte, readChunkSize),
+		probeTimeout: defaultProbeTimeout,
 	}
 }
 

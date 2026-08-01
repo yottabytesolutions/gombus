@@ -29,7 +29,7 @@ func TestDecodeShortFrameRejected(t *testing.T) {
 
 func TestDecodeUnsupportedCI(t *testing.T) {
 	lf := LongFrame(make([]byte, 21))
-	lf[6] = 0x73 // SND_UD instead of variable-data response
+	lf[6] = 0x71 // report of alarm status, neither a variable nor a fixed response
 	_, err := lf.Decode()
 	assert.ErrorIs(t, err, ErrUnsupportedCI)
 }
