@@ -1,13 +1,14 @@
+// Command mbusctl talks to wired M-Bus meters over TCP or serial: it scans a
+// bus, reads meters by primary or secondary address, and assigns primary
+// addresses. Human readable output by default, JSON with -json.
 package main
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
-	"log"
-	"log/slog"
-	"net"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -16,260 +17,201 @@ import (
 	"github.com/yottabytesolutions/gombus"
 )
 
-var device = flag.String("device", "192.168.13.42:10001", "address. ether tcp ex 192.168.1.10:10000 or /dev/tty*")
-
-var mode = flag.String("mode", "scan", "valid modes are: scan,set-primary,read-single,read-multi")
-
-// set-primary
-var (
-	newPrimary     = flag.Int("new-primary", -1, "new primary address")
-	currentPrimary = flag.Int("current-primary", -1, "current primary address")
-)
-
-// scan
-var (
-	addr     = flag.Int("addr", 1, "primary address start number. use 254 if only one meter connected to bus")
-	addrStop = flag.Int("addr-stop", 250, "primary address stop number")
-	logLevel = flag.String("loglevel", "info", "available levels are: "+strings.Join(getLevels(), ","))
-)
-
-// A meter can hold 1..250 as its own address. 0 marks an unconfigured slave and
-// 251..255 are reserved.
+// Exit codes. 2 is reserved for bad invocation so a script can tell a typo from
+// a bus that did not answer.
 const (
-	minPrimaryAddr = 1
-	maxPrimaryAddr = 250
-	// addrSecondarySelect (0xFD) is where a meter answers after a secondary
-	// selection. addrBroadcastReply (0xFE) is broadcast-with-reply, the
-	// documented way to reach the only meter on a bus when its address is
-	// unknown. Both are valid places to SEND a frame.
-	addrSecondarySelect = 253
-	addrBroadcastReply  = 254
+	exitOK    = 0
+	exitError = 1
+	exitUsage = 2
 )
 
-// parseDestinationAddr range-checks an address a frame will be SENT TO, so it
-// also accepts 0xFD and 0xFE. Range-checking happens before the narrowing
-// conversion: converting first wraps silently, turning 300 into meter 44.
-func parseDestinationAddr(flagName string, value int) (uint8, error) {
-	valid := (value >= minPrimaryAddr && value <= maxPrimaryAddr) ||
-		value == addrSecondarySelect || value == addrBroadcastReply
-	if !valid {
-		return 0, fmt.Errorf(
-			"invalid -%s %d: address to read from must be %d..%d, %d (secondary select) or %d (broadcast with reply)",
-			flagName, value, minPrimaryAddr, maxPrimaryAddr, addrSecondarySelect, addrBroadcastReply,
-		)
-	}
-	return uint8(value), nil
-}
+// usageError marks an error caused by the command line, not by the bus.
+type usageError struct{ err error }
 
-// parseAssignableAddr range-checks an address that will be WRITTEN INTO a meter
-// as its own. Stricter than parseDestinationAddr on purpose: 0xFE is a fine
-// destination but writing it into a meter makes that meter answer every
-// broadcast, which cannot be undone over the bus.
-func parseAssignableAddr(flagName string, value int) (uint8, error) {
-	if value < minPrimaryAddr || value > maxPrimaryAddr {
-		return 0, fmt.Errorf(
-			"invalid -%s %d: address written into a meter must be %d..%d",
-			flagName, value, minPrimaryAddr, maxPrimaryAddr,
-		)
-	}
-	return uint8(value), nil
-}
+func (e *usageError) Error() string { return e.err.Error() }
 
-var logLevels = map[string]slog.Level{
-	"debug": slog.LevelDebug,
-	"info":  slog.LevelInfo,
-	"warn":  slog.LevelWarn,
-	"error": slog.LevelError,
-}
+func (e *usageError) Unwrap() error { return e.err }
 
-func getLevels() []string {
-	lvls := make([]string, 0, len(logLevels))
-	for k := range logLevels {
-		lvls = append(lvls, k)
-	}
-	return lvls
+func usagef(format string, args ...any) error {
+	return &usageError{err: fmt.Errorf(format, args...)}
 }
 
 func main() {
-	flag.Parse()
-	lvl, ok := logLevels[strings.ToLower(*logLevel)]
-	if !ok {
-		log.Fatalf("invalid log level: %s", *logLevel)
-	}
-	if lvl != slog.LevelInfo {
-		_, _ = fmt.Fprintf(os.Stderr, "using loglevel: %s\n", lvl.String())
-	}
-	slog.SetLogLoggerLevel(lvl)
+	os.Exit(mainCode())
+}
 
-	primaryAddr, err := parseDestinationAddr("addr", *addr)
-	if err != nil {
-		log.Fatal(err)
-	}
-	primaryAddrStop, err := parseDestinationAddr("addr-stop", *addrStop)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Validated before dial so bad input never reaches the bus. Only
-	// set-primary reads these, and their -1 defaults are not valid addresses.
-	var currentAddr, newAddr uint8
-	if *mode == "set-primary" {
-		if currentAddr, err = parseDestinationAddr("current-primary", *currentPrimary); err != nil {
-			log.Fatal(err)
-		}
-		if newAddr, err = parseAssignableAddr("new-primary", *newPrimary); err != nil {
-			log.Fatal(err)
-		}
-	}
-
-	log.Printf("connecting to: %s\n", *device)
-	conn, err := dial(*device)
-	if err != nil {
-		log.Println(fmt.Errorf("error connecting to mbus: %w", err))
-		return
-	}
-	// One Client for the whole session: it owns the framing state, so building
-	// a fresh one per read would drop bytes that arrived after a frame's stop
-	// byte and desynchronise the stream.
-	client := gombus.NewClient(conn)
-	defer func() {
-		if err := client.Close(); err != nil {
-			log.Printf("error closing connection: %v", err)
-		}
-	}()
-
-	// Ctrl-C cancels whatever exchange is in flight instead of waiting out its
-	// timeout.
+// mainCode is main with a return value, so the signal handler's cleanup runs
+// before the process exits.
+func mainCode() int {
+	// Ctrl-C cancels the exchange in flight instead of waiting out its timeout.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	switch *mode {
-	case "scan":
-		// i is uint8, so this loop terminates only because
-		// parseDestinationAddr rejects 255: i++ on 254 exits, i++ on 255 wraps
-		// to 0 and runs forever. Widening the accepted range means fixing this.
-		for i := primaryAddr; i <= primaryAddrStop; i++ {
-			log.Println("checking address:", i)
-			frame, err := readPrimaryAddress(ctx, client, i)
-			if err != nil {
-				log.Println("error checking address:", i, err)
-				continue
-			}
-			log.Println(
-				"Found device:",
-				frame.SerialNumber,
-				frame.Manufacturer,
-				frame.Version,
-				frame.DeviceType,
-				frame.SecondaryAddressString(),
-			)
-		}
-	case "set-primary":
-		log.Printf("change primary address from %d to %d\n", currentAddr, newAddr)
-		if err := setPrimary(ctx, client, currentAddr, newAddr); err != nil {
-			log.Println(err)
-			return
-		}
-	case "read-single":
-		frame, err := readPrimaryAddress(ctx, client, primaryAddr)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		b, err := json.MarshalIndent(frame, "", "\t")
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		fmt.Println(string(b))
-	case "read-multi":
-		frames, err := client.ReadAllFrames(ctx, primaryAddr)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		b, err := json.MarshalIndent(frames, "", "\t")
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		fmt.Println(string(b))
+	err := run(ctx, os.Args[1:], os.Stdout)
+	switch {
+	case err == nil:
+		return exitOK
+	case errors.Is(err, flag.ErrHelp):
+		return exitUsage
 	default:
-		log.Printf("unknown mode: %s\n", *mode)
+		writeText(os.Stderr, fmt.Sprintf("mbusctl: %v\n", err))
+		var ue *usageError
+		if errors.As(err, &ue) {
+			writeText(os.Stderr, "run 'mbusctl help' for usage\n")
+			return exitUsage
+		}
+		return exitError
 	}
 }
 
-func dial(device string) (gombus.Conn, error) {
-	_, _, err := net.SplitHostPort(device)
-	if err != nil {
-		log.Printf("device %s does not contain a port, assuming its a serial device\n", device)
-		return gombus.DialSerial(device)
+// run dispatches the subcommand. Data goes to out, diagnostics to stderr.
+func run(ctx context.Context, args []string, out io.Writer) error {
+	if len(args) == 0 {
+		printUsage(os.Stderr)
+		return usagef("no command given")
 	}
 
+	switch args[0] {
+	case "scan":
+		return runScan(ctx, args[1:], out)
+	case "read":
+		return runRead(ctx, args[1:], out)
+	case "set-address":
+		return runSetAddress(ctx, args[1:], out)
+	case "help", "-h", "-help", "--help":
+		printUsage(out)
+		return nil
+	default:
+		printUsage(os.Stderr)
+		return usagef("unknown command %q", args[0])
+	}
+}
+
+// writeText prints help, usage and diagnostics. It is the one place a write
+// error is dropped: these go to stderr, so there is nothing left to report a
+// failed write with.
+func writeText(w io.Writer, text string) {
+	_, _ = io.WriteString(w, text)
+}
+
+func printUsage(w io.Writer) {
+	writeText(w, `mbusctl reads wired M-Bus meters over TCP or serial.
+
+usage: mbusctl <command> [flags] [arguments]
+
+commands:
+  scan         find meters by primary or secondary address
+  read         read one meter by primary or secondary address
+  set-address  write a new primary address into a meter
+  help         show this text
+
+Flags come after the command: mbusctl read -device /dev/ttyUSB0 1
+Run 'mbusctl <command> -h' for the flags of one command.
+`)
+}
+
+// printer writes text output and keeps the first write error. A closed pipe
+// then surfaces once, as the command's error, instead of after every line.
+type printer struct {
+	w   io.Writer
+	err error
+}
+
+func newPrinter(w io.Writer) *printer { return &printer{w: w} }
+
+func (p *printer) printf(format string, args ...any) {
+	if p.err != nil {
+		return
+	}
+	_, p.err = fmt.Fprintf(p.w, format, args...)
+}
+
+func (p *printer) Err() error { return p.err }
+
+// busFlags are the flags every subcommand shares.
+type busFlags struct {
+	device  string
+	timeout time.Duration
+	json    bool
+}
+
+// addBusFlags registers the shared flags. timeout is the budget for the whole
+// command, so a scan gets a longer default than a single read.
+func addBusFlags(fs *flag.FlagSet, timeout time.Duration) *busFlags {
+	bf := &busFlags{}
+	fs.StringVar(&bf.device, "device", "", "meter transport: host:port for TCP, /dev/tty* for serial (required)")
+	fs.DurationVar(&bf.timeout, "timeout", timeout, "time budget for the whole command")
+	fs.BoolVar(&bf.json, "json", false, "print JSON instead of text")
+	return bf
+}
+
+func (bf *busFlags) validate() error {
+	if bf.device == "" {
+		return usagef("missing -device")
+	}
+	if bf.timeout <= 0 {
+		return usagef("invalid -timeout %s: must be positive", bf.timeout)
+	}
+	return nil
+}
+
+// withClient dials the device, runs fn with a deadline, and closes the
+// transport. One Client serves the whole command: it owns the framing state, so
+// a fresh one per exchange would drop bytes that arrived after a stop byte and
+// desynchronise the stream.
+func (bf *busFlags) withClient(ctx context.Context, fn func(context.Context, *gombus.Client) error) error {
+	conn, err := dial(bf.device)
+	if err != nil {
+		return err
+	}
+	client := gombus.NewClient(conn)
+
+	ctx, cancel := context.WithTimeout(ctx, bf.timeout)
+	defer cancel()
+
+	err = fn(ctx, client)
+	if closeErr := client.Close(); closeErr != nil {
+		err = errors.Join(err, fmt.Errorf("closing transport: %w", closeErr))
+	}
+	return err
+}
+
+// dial picks the transport from the device string: a path is serial, host:port
+// is TCP.
+func dial(device string) (gombus.Conn, error) {
+	if strings.Contains(device, "/") {
+		conn, err := gombus.DialSerial(device)
+		if err != nil {
+			return nil, fmt.Errorf("opening serial device %s: %w", device, err)
+		}
+		return conn, nil
+	}
+	if !strings.Contains(device, ":") {
+		return nil, usagef("invalid -device %q: want host:port for TCP or a /dev path for serial", device)
+	}
 	conn, err := gombus.DialTCP(device)
 	if err != nil {
-		return nil, fmt.Errorf("error connecting to mbus: %w", err)
+		return nil, fmt.Errorf("connecting to %s: %w", device, err)
 	}
-
 	return conn, nil
 }
 
-func readPrimaryAddress(ctx context.Context, client *gombus.Client, primaryAddr uint8) (*gombus.DecodedFrame, error) {
-	// A scan asks addresses that mostly hold no meter, so bound the ack to 1s
-	// instead of waiting out the full frame timeout on every empty address.
-	ackCtx, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-
-	slog.Debug("writing NKE")
-	if err := client.WriteFrame(ackCtx, gombus.SndNKE(primaryAddr)); err != nil {
-		return nil, err
-	}
-	slog.Debug("writing NKE done")
-
-	slog.Debug("ReadSingleCharFrame")
-	if _, err := client.ReadSingleCharFrame(ackCtx); err != nil {
-		return nil, err
-	}
-	slog.Debug("ReadSingleCharFrame done")
-
-	slog.Debug("client.ReadSingleFrame")
-	frame, err := client.ReadSingleFrame(ctx, primaryAddr)
-	if err != nil {
-		return nil, err
-	}
-	slog.Debug("client.ReadSingleFrame done")
-
-	return frame, nil
-}
-
-func setPrimary(ctx context.Context, client *gombus.Client, primaryAddr, newPrimary uint8) error {
-	// Writing an address is not a scan: the meter is known to be there, so allow
-	// it longer to answer than readPrimaryAddress does.
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	slog.Debug("writing NKE")
-	if err := client.WriteFrame(ctx, gombus.SndNKE(primaryAddr)); err != nil {
+// parseFlags parses fs and turns a bad command line into a usage error.
+//
+// The flag package prints the error and the whole usage text itself. That is
+// silenced here so a bad flag is reported once, by main. -h still prints the
+// subcommand's flags, and is not a failure of the bus.
+func parseFlags(fs *flag.FlagSet, args []string) error {
+	fs.SetOutput(io.Discard)
+	err := fs.Parse(args)
+	fs.SetOutput(os.Stderr)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, flag.ErrHelp):
+		fs.Usage()
 		return err
+	default:
+		return &usageError{err: err}
 	}
-	slog.Debug("writing NKE done")
-
-	slog.Debug("ReadSingleCharFrame")
-	if _, err := client.ReadSingleCharFrame(ctx); err != nil {
-		return err
-	}
-	slog.Debug("ReadSingleCharFrame done")
-
-	frame, err := gombus.SetPrimaryUsingPrimary(primaryAddr, newPrimary)
-	if err != nil {
-		return fmt.Errorf("building set-primary frame: %w", err)
-	}
-	if err := client.WriteFrame(ctx, frame); err != nil {
-		return err
-	}
-	if _, err := client.ReadSingleCharFrame(ctx); err != nil {
-		return fmt.Errorf("timeout waiting for answer after setting address: %w", err)
-	}
-
-	return nil
 }
