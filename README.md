@@ -1,6 +1,10 @@
 # gombus
 
 [![CI](https://github.com/yottabytesolutions/gombus/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yottabytesolutions/gombus/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/yottabytesolutions/gombus/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/yottabytesolutions/gombus/security/code-scanning)
+[![Go Reference](https://pkg.go.dev/badge/github.com/yottabytesolutions/gombus.svg)](https://pkg.go.dev/github.com/yottabytesolutions/gombus)
+[![Release](https://img.shields.io/github/v/release/yottabytesolutions/gombus)](https://github.com/yottabytesolutions/gombus/releases)
+[![License](https://img.shields.io/github/license/yottabytesolutions/gombus)](LICENSE)
 
 A pure-Go implementation of the wired M-Bus (Meter-Bus) protocol per
 EN 13757-3, with helpers for both TCP and RS-485 serial transports.
