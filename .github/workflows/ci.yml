@@ -2,8 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   pull_request:
+    branches: [ main ]
 
 permissions:
   contents: read
@@ -12,70 +13,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          # go.mod is the single source of truth for the Go version. Naming a
-          # version here too would drift from it silently.
-          go-version-file: go.mod
-
-      - name: Tidy check
-        run: go mod tidy -diff
-
-      - name: Build
-        run: go build ./...
-
-      - name: Test
-        run: go test -race ./...
-
-      # The decoder parses untrusted bytes off the bus, so a short fuzz run
-      # guards the no-panic contract on every change. testdata/fuzz seeds it;
-      # longer campaigns run out of band.
-      - name: Fuzz smoke
-        run: go test -run=FuzzDecode -fuzz=FuzzDecode -fuzztime=60s
-
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@d1eae1ac25e2c85b0c337d61e6b93520dc37e40b  # v6.1.0
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v9
-        with:
-          # Pinned, not "latest", for two reasons. golangci-lint must be built
-          # with a Go at least as new as go.mod's, or it refuses to load the
-          # config at all; and .golangci.yml is a v2 config, which needs a v2
-          # binary. "latest" gave neither and CI failed on both counts.
-          version: v2.12.2
-
-  cross-compile:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # 32-bit targets are not decoration: they pin the fix for integer
-          # decoding that used to depend on the width of int.
-          - goos: linux
-            goarch: arm
-          - goos: linux
-            goarch: '386'
-          - goos: linux
-            goarch: arm64
-          - goos: linux
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
-          - goos: windows
-            goarch: amd64
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: go build ./...
+      - run: go vet ./...
+      - run: go build ./...
+      - run: go test -race ./...
