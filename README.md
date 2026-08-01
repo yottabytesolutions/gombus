@@ -1,6 +1,6 @@
 # gombus
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/yottabytesolutions/gombus)](https://goreportcard.com/report/github.com/yottabytesolutions/gombus)
+[![CI](https://github.com/yottabytesolutions/gombus/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yottabytesolutions/gombus/actions/workflows/ci.yml)
 
 A pure-Go implementation of the wired M-Bus (Meter-Bus) protocol per
 EN 13757-3, with helpers for both TCP and RS-485 serial transports.
