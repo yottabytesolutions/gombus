@@ -215,7 +215,18 @@ func (c *Client) narrowSecondary(ctx context.Context, mask []byte, pos int, foun
 // It returns ErrSelectNoAnswer when nothing matches and ErrSelectCollision when
 // several slaves do.
 func (c *Client) SelectSecondary(ctx context.Context, sec SecondaryAddress) error {
-	filter, err := newSecondaryFilter(sec)
+	return c.selectSecondary(ctx, sec, false)
+}
+
+// SelectSecondaryExact selects sec using every secondary-address component,
+// including version and medium. Use it when an identification number might be
+// shared by multiple meters. Unlike SelectSecondary, zero is an exact value.
+func (c *Client) SelectSecondaryExact(ctx context.Context, sec SecondaryAddress) error {
+	return c.selectSecondary(ctx, sec, true)
+}
+
+func (c *Client) selectSecondary(ctx context.Context, sec SecondaryAddress, exact bool) error {
+	filter, err := newSecondaryFilter(sec, exact)
 	if err != nil {
 		return err
 	}
@@ -334,7 +345,7 @@ type secondaryFilter struct {
 
 // newSecondaryFilter builds an exact filter for sec. Version and medium stay
 // wildcarded; see SelectSecondary.
-func newSecondaryFilter(sec SecondaryAddress) (secondaryFilter, error) {
+func newSecondaryFilter(sec SecondaryAddress, exact bool) (secondaryFilter, error) {
 	id, err := maskToBCD(sec.Mask())
 	if err != nil {
 		return secondaryFilter{}, err
@@ -346,7 +357,11 @@ func newSecondaryFilter(sec SecondaryAddress) (secondaryFilter, error) {
 			return secondaryFilter{}, err
 		}
 	}
-	return secondaryFilter{id: id, manufacturer: manufacturer, version: 0xFF, medium: 0xFF}, nil
+	filter := secondaryFilter{id: id, manufacturer: manufacturer, version: 0xFF, medium: 0xFF}
+	if exact {
+		filter.version, filter.medium = sec.Version, sec.Medium
+	}
+	return filter, nil
 }
 
 // frame builds the SND_UD selection frame (CI=0x52) addressed to 0xFD.

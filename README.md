@@ -20,7 +20,8 @@ Falck, who created the original library. Upstream has been inactive since
 
 ## Features
 
-- Wired master over TCP and RS-485 serial, and over anything else that moves
+- Wired master over TCP and RS-485 serial (configurable baud, data bits, parity
+  and stop bits), and over anything else that moves
   bytes: the `Conn` interface has `net.Conn`'s shape.
 - Variable data responses (CI=0x72) and fixed data responses (CI=0x73),
   decoded into the same record model.
@@ -31,7 +32,8 @@ Falck, who created the original library. Upstream has been inactive since
 - Record query API: pick readings by VIF type, function, storage number,
   tariff and sub-device instead of walking a slice.
 - Wireless M-Bus decoding: frame format A and B, security modes 0, 5 and 7.
-- `mbusctl`, a CLI for scanning, reading and readdressing, with JSON output.
+- `mbusctl`, a CLI for scanning, reading, readdressing and offline wireless
+  decoding, with JSON output.
 - Errors instead of silent zeros. A reading that did not decode says so.
 
 ## Comparison
@@ -98,7 +100,8 @@ func main() {
 For serial:
 
 ```go
-conn, err := gombus.DialSerial("/dev/ttyUSB0")
+conn, err := gombus.DialSerial("/dev/ttyUSB0") // conventional 2400 8E1
+// For another bus, use DialSerialConfig with an explicit SerialConfig.
 ```
 
 Keep one `Client` per transport. It owns the bytes that arrive after a frame's
@@ -188,17 +191,28 @@ matchers and queries apply.
 
 ```
 mbusctl scan  -device /dev/ttyUSB0 -from 1 -to 20
+mbusctl scan  -device /dev/ttyUSB0 -probe-timeout 200ms
 mbusctl scan  -device /dev/ttyUSB0 -secondary -json
 mbusctl read  -device 192.168.1.10:10001 1
-mbusctl read  -device /dev/ttyUSB0 -secondary 12345678 -json
+mbusctl read  -device /dev/ttyUSB0 -secondary -manufacturer KAM -version 16 -medium 4 12345678 -json
 mbusctl read  -device /dev/ttyUSB0 -all 1
 mbusctl set-address -device /dev/ttyUSB0 1 5
+mbusctl wmbus-decode -input telegram.hex -format auto -key-file keys.json -json
 ```
 
-`-device` takes `host:port` for TCP or a `/dev/tty*` path for serial.
+`-device` takes `host:port` for TCP or a `/dev/tty*` path for serial. Serial
+defaults are 2400 8E1 and can be changed with `-baud`, `-data-bits`, `-parity`
+and `-stop-bits`. `-probe-timeout` is the per-address silence window during a
+scan; lower it only when the gateway and bus are known to answer quickly.
 `-timeout` bounds the whole command. `-json` prints records with their type,
 function, storage number, tariff, device, value, unit and timestamps, which is
 the shape a collector or a scrape job wants.
+
+`wmbus-decode` accepts one whitespace-separated hexadecimal telegram from a
+file or standard input. `-format` chooses `auto`, `a`, `b` or `stripped`.
+Encrypted telegrams use a JSON key file whose object keys are 8-digit meter
+serials and whose values are 32-hex-digit AES keys; keys are deliberately not
+accepted on the command line, where other users can inspect them.
 
 ## Tested with
 

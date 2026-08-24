@@ -9,6 +9,10 @@ import (
 
 // Telegram is a fully decoded wireless M-Bus telegram.
 type Telegram struct {
+	// Format and LinkControl preserve link-layer metadata useful to receiver
+	// loops. Raw payload bytes are intentionally not retained.
+	Format      Format
+	LinkControl byte
 	// Manufacturer is the three letter code of the meter.
 	Manufacturer string
 
@@ -100,6 +104,8 @@ func (f *Frame) Decode(key []byte) (*Telegram, error) {
 	}
 
 	return &Telegram{
+		Format:         f.Format,
+		LinkControl:    f.C,
 		Manufacturer:   decoded.Manufacturer,
 		SerialNumber:   decoded.SerialNumber,
 		Version:        tr.address[6],

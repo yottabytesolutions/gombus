@@ -197,6 +197,16 @@ func TestDecodeTypeFInvalidBit(t *testing.T) {
 	}
 }
 
+func TestDecodeTypeJ(t *testing.T) {
+	got, err := decodeTypeJ([]byte{59, 58, 23})
+	require.NoError(t, err)
+	assert.Equal(t, TimeOfDay{Hour: 23, Minute: 58, Second: 59}, got)
+	for _, raw := range [][]byte{{0xff, 0xff, 0xff}, {60, 0, 0}, {0, 0, 24}, {0x40, 0, 0}} {
+		_, err := decodeTypeJ(raw)
+		require.ErrorIs(t, err, ErrInvalidDateTime)
+	}
+}
+
 // TestDecodeRecordTimeInFrame pins the end-to-end behaviour through Decode: a
 // date record carries both Time and its raw bits, and a bad date sets ValueErr
 // without failing the frame or losing the records around it.
@@ -251,10 +261,9 @@ func TestDecodeRecordTimeInFrame(t *testing.T) {
 		},
 		// 0x6D in three bytes is type J, a time with no date.
 		{
-			name:    "type J is unsupported not invalid",
+			name:    "type J",
 			payload: "03 6D 00 00 08",
 			wantRaw: 0x080000,
-			wantErr: ErrUnsupportedDateTime,
 		},
 	}
 	for _, tc := range cases {
@@ -269,7 +278,12 @@ func TestDecodeRecordTimeInFrame(t *testing.T) {
 				assert.True(t, rec.Time.IsZero(), "Time must stay zero when ValueErr is set")
 			} else {
 				require.NoError(t, rec.ValueErr)
-				assert.Equal(t, tc.wantTime, rec.Time)
+				if tc.name == "type J" {
+					require.NotNil(t, rec.TimeOfDay)
+					assert.Equal(t, TimeOfDay{Hour: 8}, *rec.TimeOfDay)
+				} else {
+					assert.Equal(t, tc.wantTime, rec.Time)
+				}
 			}
 			assert.Equal(t, tc.wantSummerTime, rec.SummerTimeFlag)
 			// Time is additive: the raw bitfield survives either way, and is

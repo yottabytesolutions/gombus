@@ -125,5 +125,5 @@ func (df DecodedFrame) Value(unitType int, function string) (float64, error) {
 func (df DecodedFrame) Timestamp() (time.Time, bool) {
 	r, ok := df.Find(MatchTimestamp(), MatchCurrent(),
 		func(r DecodedDataRecord) bool { return r.ValueErr == nil })
-	return r.Time, ok
+	return r.Time, ok && !r.Time.IsZero()
 }

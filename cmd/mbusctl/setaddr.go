@@ -14,6 +14,9 @@ func runSetAddress(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("set-address", flag.ContinueOnError)
 	bf := addBusFlags(fs, readTimeout)
 	secondary := fs.Bool("secondary", false, "treat the current address as a secondary id, whatever its length")
+	manufacturer := fs.String("manufacturer", "", "secondary manufacturer code (for example KAM)")
+	version := fs.Int("version", -1, "secondary version; requires -medium")
+	medium := fs.Int("medium", -1, "secondary medium byte; requires -version")
 	fs.Usage = func() {
 		writeText(fs.Output(), "usage: mbusctl set-address [flags] <current> <new>\n\n"+
 			"current is a primary address (1..250, or 254 for the only meter on the bus)\n"+
@@ -29,6 +32,9 @@ func runSetAddress(ctx context.Context, args []string, out io.Writer) error {
 	}
 	tgt, err := parseTarget(fs.Arg(0), *secondary)
 	if err != nil {
+		return err
+	}
+	if err := addSecondarySelector(&tgt, *manufacturer, *version, *medium); err != nil {
 		return err
 	}
 	newAddr, err := parseNewPrimary(fs.Arg(1))
@@ -73,7 +79,14 @@ func parseNewPrimary(arg string) (uint8, error) {
 func setAddress(ctx context.Context, c *gombus.Client, tgt target, newAddr uint8) error {
 	addr := tgt.primary
 	if tgt.secondary {
-		if err := c.SelectSecondary(ctx, gombus.SecondaryAddress{ID: tgt.id}); err != nil {
+		sec := gombus.SecondaryAddress{ID: tgt.id, Manufacturer: tgt.manufacturer, Version: byte(tgt.version), Medium: byte(tgt.medium)}
+		var err error
+		if tgt.exactSecondary {
+			err = c.SelectSecondaryExact(ctx, sec)
+		} else {
+			err = c.SelectSecondary(ctx, sec)
+		}
+		if err != nil {
 			return err
 		}
 		addr = addrSecondarySelect

@@ -22,6 +22,7 @@ func runScan(ctx context.Context, args []string, out io.Writer) error {
 	secondary := fs.Bool("secondary", false, "scan secondary addresses by wildcard search")
 	from := fs.Int("from", minPrimaryAddr, "first primary address to probe")
 	to := fs.Int("to", maxPrimaryAddr, "last primary address to probe")
+	probeTimeout := fs.Duration("probe-timeout", 500*time.Millisecond, "maximum silence per scan probe")
 	fs.Usage = func() {
 		writeText(fs.Output(), "usage: mbusctl scan [-primary|-secondary] [flags]\n\n")
 		fs.PrintDefaults()
@@ -39,9 +40,15 @@ func runScan(ctx context.Context, args []string, out io.Writer) error {
 	if err := bf.validate(); err != nil {
 		return err
 	}
+	if *probeTimeout <= 0 {
+		return usagef("invalid -probe-timeout %s: must be positive", *probeTimeout)
+	}
 
 	if *secondary {
 		return bf.withClient(ctx, func(ctx context.Context, c *gombus.Client) error {
+			if err := c.SetProbeTimeout(*probeTimeout); err != nil {
+				return err
+			}
 			return scanSecondary(ctx, c, out, bf.json)
 		})
 	}
@@ -58,6 +65,9 @@ func runScan(ctx context.Context, args []string, out io.Writer) error {
 		return usagef("invalid range: -from %d is above -to %d", start, stop)
 	}
 	return bf.withClient(ctx, func(ctx context.Context, c *gombus.Client) error {
+		if err := c.SetProbeTimeout(*probeTimeout); err != nil {
+			return err
+		}
 		return scanPrimary(ctx, c, out, bf.json, start, stop)
 	})
 }

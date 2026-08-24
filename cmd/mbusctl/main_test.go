@@ -82,7 +82,7 @@ func TestRunSubcommandHelp(t *testing.T) {
 // dialled: a path is serial, host:port is TCP, and anything else is a typo
 // rather than a device.
 func TestDialRejectsUnusableDevice(t *testing.T) {
-	_, err := dial("ttyUSB0")
+	_, err := dial("ttyUSB0", &busFlags{})
 	if err == nil {
 		t.Fatal("expected an error for a device that is neither a path nor host:port")
 	}

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-24
+
+### Added
+
+- Configurable serial transport settings, per-address scan probe timeouts, and
+  exact secondary-address selection in both the library and `mbusctl`.
+- Type-J (CP24) local time-of-day decoding without inventing a date or zone.
+- `mbusctl wmbus-decode` for bounded offline decoding of hexadecimal wireless
+  telegrams, including keyring-file support and stable JSON output.
+- Wireless telegram link format and control metadata.
+
 ## [1.1.1] - 2026-08-24
 
 ### Fixed
@@ -79,6 +90,7 @@ First stable release of the fork.
 - Dependencies updated.
 
 [Unreleased]: https://github.com/yottabytesolutions/gombus/compare/v1.1.1...HEAD
+[1.2.0]: https://github.com/yottabytesolutions/gombus/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/yottabytesolutions/gombus/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/yottabytesolutions/gombus/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/yottabytesolutions/gombus/releases/tag/v1.0.0

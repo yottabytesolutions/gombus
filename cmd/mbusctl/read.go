@@ -24,6 +24,9 @@ func runRead(ctx context.Context, args []string, out io.Writer) error {
 	bf := addBusFlags(fs, readTimeout)
 	all := fs.Bool("all", false, "read every frame the meter has, not just the first")
 	secondary := fs.Bool("secondary", false, "treat the address as a secondary id, whatever its length")
+	manufacturer := fs.String("manufacturer", "", "secondary manufacturer code (for example KAM)")
+	version := fs.Int("version", -1, "secondary version; requires -medium")
+	medium := fs.Int("medium", -1, "secondary medium byte; requires -version")
 	fs.Usage = func() {
 		writeText(fs.Output(), "usage: mbusctl read [flags] <address>\n\n"+
 			"address is a primary address (1..250) or an 8-digit secondary id.\n\n")
@@ -38,6 +41,9 @@ func runRead(ctx context.Context, args []string, out io.Writer) error {
 	}
 	tgt, err := parseTarget(fs.Arg(0), *secondary)
 	if err != nil {
+		return err
+	}
+	if err := addSecondarySelector(&tgt, *manufacturer, *version, *medium); err != nil {
 		return err
 	}
 	if err := bf.validate(); err != nil {
@@ -58,15 +64,30 @@ func runRead(ctx context.Context, args []string, out io.Writer) error {
 func readFrames(ctx context.Context, c *gombus.Client, tgt target, all bool) ([]*gombus.DecodedFrame, error) {
 	addr := tgt.primary
 	if tgt.secondary {
-		sec := gombus.SecondaryAddress{ID: tgt.id}
+		sec := gombus.SecondaryAddress{ID: tgt.id, Manufacturer: tgt.manufacturer, Version: byte(tgt.version), Medium: byte(tgt.medium)}
 		if !all {
-			frame, err := c.ReadBySecondary(ctx, sec)
+			var frame *gombus.DecodedFrame
+			var err error
+			if tgt.exactSecondary {
+				err = c.SelectSecondaryExact(ctx, sec)
+				if err == nil {
+					frame, err = c.ReadSingleFrame(ctx, addrSecondarySelect)
+				}
+			} else {
+				frame, err = c.ReadBySecondary(ctx, sec)
+			}
 			if err != nil {
 				return nil, err
 			}
 			return []*gombus.DecodedFrame{frame}, nil
 		}
-		if err := c.SelectSecondary(ctx, sec); err != nil {
+		var err error
+		if tgt.exactSecondary {
+			err = c.SelectSecondaryExact(ctx, sec)
+		} else {
+			err = c.SelectSecondary(ctx, sec)
+		}
+		if err != nil {
 			return nil, err
 		}
 		addr = addrSecondarySelect
@@ -142,6 +163,8 @@ func recordValue(r gombus.DecodedDataRecord) string {
 		return "undecodable: " + r.ValueErr.Error()
 	case !r.Time.IsZero():
 		return r.Time.Format(time.RFC3339)
+	case r.TimeOfDay != nil:
+		return r.TimeOfDay.String()
 	case r.ValueString != "":
 		return r.ValueString
 	case r.Unit.Unit == "":

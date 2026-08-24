@@ -72,6 +72,11 @@ type DecodedDataRecord struct {
 	// raw bitfield is still in RawValue either way.
 	Time time.Time
 
+	// TimeOfDay is a Type-J (CP24) local time. Unlike Time it deliberately has
+	// no date or timezone, so callers cannot accidentally invent either. It is
+	// nil for every non-Type-J record and when ValueErr is set.
+	TimeOfDay *TimeOfDay
+
 	// SummerTimeFlag is the type F summer-time (SU) bit exactly as the meter
 	// sent it. It is not a timezone and it does not shift Time. Interpreting it
 	// needs knowledge of the meter's local rules that the frame does not carry.

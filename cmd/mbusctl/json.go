@@ -59,6 +59,7 @@ type jsonRecord struct {
 	ValueString   string  `json:"value_string"`
 	ValueError    string  `json:"value_error,omitempty"`
 	Time          string  `json:"time,omitempty"`
+	TimeOfDay     string  `json:"time_of_day,omitempty"`
 }
 
 type jsonPrimaryScan struct {
@@ -125,6 +126,9 @@ func newJSONRecord(r gombus.DecodedDataRecord) jsonRecord {
 	}
 	if !r.Time.IsZero() {
 		rec.Time = r.Time.Format(time.RFC3339)
+	}
+	if r.TimeOfDay != nil {
+		rec.TimeOfDay = r.TimeOfDay.String()
 	}
 	return rec
 }

@@ -83,9 +83,29 @@ func parseAssignableAddr(flagName string, value int) (uint8, error) {
 // target is the meter a command acts on: either a primary address or a
 // secondary identification number.
 type target struct {
-	secondary bool
-	primary   uint8
-	id        uint64
+	secondary       bool
+	primary         uint8
+	id              uint64
+	manufacturer    string
+	version, medium int
+	exactSecondary  bool
+}
+
+func addSecondarySelector(t *target, manufacturer string, version, medium int) error {
+	if manufacturer != "" || version >= 0 || medium >= 0 {
+		if !t.secondary {
+			return usagef("secondary selector flags require -secondary or an 8-digit secondary id")
+		}
+	}
+	if (version >= 0) != (medium >= 0) {
+		return usagef("-version and -medium must be used together")
+	}
+	if version > 255 || medium > 255 {
+		return usagef("secondary version and medium must be 0..255")
+	}
+	t.manufacturer, t.version, t.medium = manufacturer, version, medium
+	t.exactSecondary = version >= 0
+	return nil
 }
 
 func (t target) String() string {
