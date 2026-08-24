@@ -37,6 +37,26 @@ const (
 	dateTypeIWidth = 6
 )
 
+// TimeOfDay is an EN 13757-3 Type-J CP24 local clock reading. It has no date
+// and no zone; both are absent from the meter telegram.
+type TimeOfDay struct{ Hour, Minute, Second int }
+
+func (t TimeOfDay) String() string { return fmt.Sprintf("%02d:%02d:%02d", t.Hour, t.Minute, t.Second) }
+
+func decodeTypeJ(b []byte) (TimeOfDay, error) {
+	if len(b) != dateTypeJWidth {
+		return TimeOfDay{}, fmt.Errorf("%w: type J needs 3 bytes", ErrInvalidDateTime)
+	}
+	if b[0] == 0xFF && b[1] == 0xFF && b[2] == 0xFF {
+		return TimeOfDay{}, fmt.Errorf("%w: type J invalid value", ErrInvalidDateTime)
+	}
+	second, minute, hour := int(b[0]&0x3F), int(b[1]&0x3F), int(b[2]&0x1F)
+	if b[0]&0xC0 != 0 || b[1]&0xC0 != 0 || b[2]&0xE0 != 0 || second > 59 || minute > 59 || hour > 23 {
+		return TimeOfDay{}, fmt.Errorf("%w: invalid type J time", ErrInvalidDateTime)
+	}
+	return TimeOfDay{Hour: hour, Minute: minute, Second: second}, nil
+}
+
 // decodeTypeG decodes an EN 13757-3 type G date: two bytes holding day, month
 // and year, with no time of day. The year is split across both bytes.
 func decodeTypeG(b []byte) (time.Time, error) {
@@ -169,12 +189,12 @@ func decodeRecordDateTime(b []byte, record *DecodedDataRecord) {
 	case dateTypeIWidth:
 		t, summerTime, err = decodeTypeI(b)
 	case dateTypeJWidth:
-		// Type J is a time of day with no date. It has no sensible time.Time
-		// without one, so it is reported rather than invented.
-		record.ValueErr = fmt.Errorf(
-			"%w: EN 13757-3 type J (time only, no date), from a %d-byte field",
-			ErrUnsupportedDateTime, len(b),
-		)
+		tod, err := decodeTypeJ(b)
+		if err != nil {
+			record.ValueErr = err
+			return
+		}
+		record.TimeOfDay = &tod
 		return
 	default:
 		record.ValueErr = fmt.Errorf(

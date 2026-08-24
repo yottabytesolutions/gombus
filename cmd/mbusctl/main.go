@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/yottabytesolutions/gombus"
+	"go.bug.st/serial"
 )
 
 // Exit codes. 2 is reserved for bad invocation so a script can tell a typo from
@@ -72,6 +73,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	}
 
 	switch args[0] {
+	case "wmbus-decode":
+		return runWMBusDecode(ctx, args[1:], out)
 	case "scan":
 		return runScan(ctx, args[1:], out)
 	case "read":
@@ -103,6 +106,7 @@ commands:
   scan         find meters by primary or secondary address
   read         read one meter by primary or secondary address
   set-address  write a new primary address into a meter
+  wmbus-decode decode one wireless M-Bus telegram from hex input
   help         show this text
 
 Flags come after the command: mbusctl read -device /dev/ttyUSB0 1
@@ -130,9 +134,11 @@ func (p *printer) Err() error { return p.err }
 
 // busFlags are the flags every subcommand shares.
 type busFlags struct {
-	device  string
-	timeout time.Duration
-	json    bool
+	device                   string
+	timeout                  time.Duration
+	json                     bool
+	baud, dataBits, stopBits int
+	parity                   string
 }
 
 // addBusFlags registers the shared flags. timeout is the budget for the whole
@@ -142,6 +148,10 @@ func addBusFlags(fs *flag.FlagSet, timeout time.Duration) *busFlags {
 	fs.StringVar(&bf.device, "device", "", "meter transport: host:port for TCP, /dev/tty* for serial (required)")
 	fs.DurationVar(&bf.timeout, "timeout", timeout, "time budget for the whole command")
 	fs.BoolVar(&bf.json, "json", false, "print JSON instead of text")
+	fs.IntVar(&bf.baud, "baud", 2400, "serial baud rate")
+	fs.IntVar(&bf.dataBits, "data-bits", 8, "serial data bits (5..8)")
+	fs.StringVar(&bf.parity, "parity", "even", "serial parity: none, odd, even, mark or space")
+	fs.IntVar(&bf.stopBits, "stop-bits", 1, "serial stop bits: 1 or 2")
 	return bf
 }
 
@@ -152,7 +162,33 @@ func (bf *busFlags) validate() error {
 	if bf.timeout <= 0 {
 		return usagef("invalid -timeout %s: must be positive", bf.timeout)
 	}
+	if _, err := bf.serialConfig(); err != nil {
+		return usagef("%v", err)
+	}
 	return nil
+}
+
+func (bf *busFlags) serialConfig() (gombus.SerialConfig, error) {
+	var parity serial.Parity
+	switch strings.ToLower(bf.parity) {
+	case "none":
+		parity = serial.NoParity
+	case "odd":
+		parity = serial.OddParity
+	case "even":
+		parity = serial.EvenParity
+	case "mark":
+		parity = serial.MarkParity
+	case "space":
+		parity = serial.SpaceParity
+	default:
+		return gombus.SerialConfig{}, fmt.Errorf("invalid -parity %q", bf.parity)
+	}
+	if bf.stopBits != 1 && bf.stopBits != 2 {
+		return gombus.SerialConfig{}, fmt.Errorf("invalid -stop-bits %d: want 1 or 2", bf.stopBits)
+	}
+	c := gombus.SerialConfig{BaudRate: bf.baud, DataBits: bf.dataBits, Parity: parity, StopBits: serial.StopBits(bf.stopBits - 1)}
+	return c, c.Validate()
 }
 
 // withClient dials the device, runs fn with a deadline, and closes the
@@ -160,7 +196,7 @@ func (bf *busFlags) validate() error {
 // a fresh one per exchange would drop bytes that arrived after a stop byte and
 // desynchronise the stream.
 func (bf *busFlags) withClient(ctx context.Context, fn func(context.Context, *gombus.Client) error) error {
-	conn, err := dial(bf.device)
+	conn, err := dial(bf.device, bf)
 	if err != nil {
 		return err
 	}
@@ -178,9 +214,13 @@ func (bf *busFlags) withClient(ctx context.Context, fn func(context.Context, *go
 
 // dial picks the transport from the device string: a path is serial, host:port
 // is TCP.
-func dial(device string) (gombus.Conn, error) {
+func dial(device string, bf *busFlags) (gombus.Conn, error) {
 	if strings.Contains(device, "/") {
-		conn, err := gombus.DialSerial(device)
+		config, err := bf.serialConfig()
+		if err != nil {
+			return nil, usagef("%v", err)
+		}
+		conn, err := gombus.DialSerialConfig(device, config)
 		if err != nil {
 			return nil, fmt.Errorf("opening serial device %s: %w", device, err)
 		}

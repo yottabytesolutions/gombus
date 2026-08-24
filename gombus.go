@@ -79,6 +79,18 @@ var (
 	ErrTooManyFrames    = errors.New("too many frames")
 )
 
+// SetProbeTimeout sets the maximum silence window used by scan probes. It does
+// not limit a reply once its first byte arrived. Short values can miss slow
+// meters, so callers should retain the default unless their transport is known
+// to be faster.
+func (c *Client) SetProbeTimeout(timeout time.Duration) error {
+	if timeout <= 0 {
+		return fmt.Errorf("probe timeout must be positive")
+	}
+	c.probeTimeout = timeout
+	return nil
+}
+
 // validateAssignableAddr accepts only the addresses a slave may hold as its own,
 // so it is the rule for an address being WRITTEN INTO a slave. Strict on
 // purpose: writing 0xFD or 0xFE into a slave makes it answer secondary
