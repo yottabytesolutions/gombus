@@ -67,7 +67,7 @@ func readHexTelegram(path string) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("opening telegram input: %w", err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		r = f
 	}
 	b, err := io.ReadAll(io.LimitReader(r, maxTelegramInput*3+1))
