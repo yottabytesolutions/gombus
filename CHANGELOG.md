@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-08-24
+
+### Fixed
+
+- Corrected the 1.1.0 changelog to record its VIF extension namespace fix.
+  The fix was already present in the v1.1.0 source release; this patch only
+  makes that release note visible to users.
+
 ## [1.1.0] - 2026-08-01
 
 ### Added
@@ -70,6 +78,7 @@ First stable release of the fork.
 - Frame handling and read paths reworked.
 - Dependencies updated.
 
-[Unreleased]: https://github.com/yottabytesolutions/gombus/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/yottabytesolutions/gombus/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/yottabytesolutions/gombus/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/yottabytesolutions/gombus/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/yottabytesolutions/gombus/releases/tag/v1.0.0
