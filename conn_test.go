@@ -15,7 +15,7 @@ import (
 //
 // Adding a method to Conn breaks this line. That is the point. Conn must stay
 // net.Conn's shape so every net.Conn is usable with no adapter.
-var _ Conn = (net.Conn)(nil)
+var _ Conn = net.Conn(nil)
 
 // The mediums that guarantee buys us, spelled out so a reader does not have to
 // take net.Conn's word for it.

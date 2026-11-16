@@ -42,13 +42,13 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           # Pinned, not "latest", for two reasons. golangci-lint must be built
           # with a Go at least as new as go.mod's, or it refuses to load the
           # config at all; and .golangci.yml is a v2 config, which needs a v2
           # binary. "latest" gave neither and CI failed on both counts.
-          version: v2.12.2
+          version: v2.15.0
 
   cross-compile:
     runs-on: ubuntu-latest

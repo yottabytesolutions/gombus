@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-11-16
+
+### Changed
+
+- Raised the minimum Go version from 1.26 to 1.27.4.
+- Updated Testify to v1.12.1 and golang.org/x/sys to v0.50.0.
+- Migrated the transitive YAML dependency to go.yaml.in/yaml/v3 v3.0.6
+  and removed obsolete transitive dependencies.
+- Updated golangci-lint to v2.15.0 and its GitHub Action to v9.3.0.
+
 ## [1.2.0] - 2026-08-24
 
 ### Added
@@ -89,7 +99,8 @@ First stable release of the fork.
 - Frame handling and read paths reworked.
 - Dependencies updated.
 
-[Unreleased]: https://github.com/yottabytesolutions/gombus/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/yottabytesolutions/gombus/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/yottabytesolutions/gombus/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/yottabytesolutions/gombus/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/yottabytesolutions/gombus/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/yottabytesolutions/gombus/compare/v1.0.0...v1.1.0
