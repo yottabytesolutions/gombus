@@ -7,4 +7,4 @@
 // go.mod file are excluded from the parent module zip.
 module github.com/yottabytesolutions/gombus/docs
 
-go 1.26
+go 1.27.4
